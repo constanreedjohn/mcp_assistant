@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  image_gen:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python servers/main_api.py
+    env_file:
+      - ./env.dev
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+
+  mcp_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python servers/main_mcp.py
+    env_file:
+      - ./env.dev
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+
+  main_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python servers/app.py
+    env_file:
+      - ./env.dev
+    ports:
+      - "7860:7860"
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app

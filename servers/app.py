@@ -2,6 +2,9 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from dotenv import load_dotenv
+load_dotenv("./env.dev")
+
 import asyncio
 import gradio as gr
 from utils.mcp_client_wrapper import MCPClientWrapper
@@ -19,6 +22,19 @@ def gradio_interface():
         
         # Return updated history, clear the input textbox, and update display_image with image_data
         return updated_history, "", image_data
+
+    async def submit_message(message, chat_history, img):
+        # Immediately append the user's message to chat history
+        if chat_history is None:
+            chat_history = []
+        chat_history = chat_history + [{"role": "user", "content": message}]
+        
+        # Yield the updated chat history and clear the input box immediately
+        yield chat_history, "", img
+        
+        # Now stream the assistant's response and update the chat
+        async for updated_history, textbox, image_data in client.process_message(message, chat_history, img):
+            yield updated_history, textbox, image_data
     
     with gr.Blocks(title="MCP Weather Client") as demo:
         gr.Markdown("# MCP Weather Assistant")
@@ -60,7 +76,7 @@ def gradio_interface():
                 
             # Connect the components
             msg.submit(
-                process_message_with_image, 
+                submit_message, 
                 inputs=[msg, chatbot, upload_image], 
                 outputs=[chatbot, msg, upload_image]
             )

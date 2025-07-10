@@ -1,20 +1,30 @@
-import sys
+from dotenv import load_dotenv
+load_dotenv("../env.dev")
+
 import os
+import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import base64
 import requests
 from fastmcp import FastMCP, Context, Image
 
-from utils.logging_utils import logger
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
+from utils.logging_utils import logger
 from utils.utils import make_nws_request, format_alert, NWS_API_BASE
 
-mcp = FastMCP(name="MainMcpServer", timeout_keep_alive=1000000000)
+IMAGE_GEN_URL = os.getenv("IMAGE_GEN_URL", "")
+
+mcp = FastMCP(name="MainMcpServer", host="0.0.0.0", port=5001)
 
 custom_middleware = [
-    Middleware(CORSMiddleware, allow_origins=["*"]),
+    Middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 ]
 
 @mcp.tool(
@@ -125,7 +135,7 @@ async def generate_image(prompt: str, ctx: Context, width: int = 512, height: in
             "width": width,
             "height": height
         }
-        response = requests.get(f"http://localhost:3001/image/generate", params=params)
+        response = requests.get(f"{IMAGE_GEN_URL}/image/generate", params=params)
         # First check if the request was successful (HTTP 200)
         if response.status_code == 200:
             try:
@@ -159,17 +169,58 @@ async def generate_image(prompt: str, ctx: Context, width: int = 512, height: in
             "status": "failed",
             "message": "Failed to generate image"
         }
+        
 
-http_app = mcp.http_app(middleware=custom_middleware)
-
-async def main():
-    # Use run_async() in async contexts
-    await mcp.run_http_async(
-        transport="streamable-http",
-        host="127.0.0.1",
-        port=5001
-    )
+@mcp.tool(
+    annotations={
+        "title": "Generate an image description from the uploaded image."
+    }
+)
+async def describe_image(prompt: str, ctx: Context) -> dict:
+    """Call request to image generator API
     
+    Args:
+        prompt: Text prompt about the detail requirement for the image description.
+    """
+    logger.info(f"[SERVER][DESCRIBE_IMAGE] Triggered")
+    try:
+        params = {
+            "prompt": prompt,
+            "file_byte": "../input.jpg"
+        }
+        response = requests.get(f"{IMAGE_GEN_URL}/image/describe", params=params)
+        # First check if the request was successful (HTTP 200)
+        if response.status_code == 200:
+            try:
+                data = response.json()  # Use response.json() instead of json.loads(response.content)
+                
+                if data["status"] == "success":                    
+                    logger.info(f"[SERVER][DESCRIBE_IMAGE] Got reponse {data['message']}")
+                    logger.info(f"[SERVER][DESCRIBE_IMAGE] Done")
+                    return data
+                else:
+                    logger.info(f"[SERVER][DESCRIBE_IMAGE] Failed: {data}")
+                    return data
+                
+            except ValueError:
+                logger.info(f"[SERVER][DESCRIBE_IMAGE] Failed: Invalid JSON response")
+                return {
+                    "status": "error",
+                    "message": "Invalid response format from image generation service"
+                }
+        else:
+            logger.info(f"[SERVER][DESCRIBE_IMAGE] Failed: HTTP {response.status_code}")
+            return {
+                "status": "failed",
+                "message": f"Image generation service returned HTTP {response.status_code}"
+            }
+        
+    except Exception as e:
+        logger.info(f"[SERVER][DESCRIBE_IMAGE] Done")
+        return {
+            "status": "failed",
+            "message": "Failed to generate image"
+        }
+
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    mcp.run(transport='http')

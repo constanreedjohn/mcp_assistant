@@ -8,12 +8,12 @@ This is a locally hosted Chatbot with MCP integrated.
 * Image Gen Tool: Integrate locally deployed Image Generation model as an API endpoint into MCP tools for functionality.
 
 ## Setups
-1. **Ollama**
+1. **LLM with llama-server**
 
-Make sure you have Ollama installed.
+Make sure you have llama-server installed.
 * Pull the model
 
-`ollama pull llama3.1:8b`
+`llama-server -hf bartowski/Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M --port 4001 --jinja`
 
 2. **Install Dependencies**
 
@@ -31,7 +31,7 @@ In order to have the Image Generation tool, we will start the FastAPI server wit
 Open a terminal
 ```
 cd server/
-python main_api.py
+python run main_api.py
 ```
 
 The server will start on `http://localhost:3001`
