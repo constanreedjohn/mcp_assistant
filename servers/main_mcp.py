@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import base64
 import requests
 from fastmcp import FastMCP, Context, Image
+from fastmcp.client.client import CallToolResult
 
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
@@ -78,7 +79,7 @@ async def get_alerts(state: str, ctx: Context) -> str:
         "title": "Get weather forecast for a location from external API"
     }
 )
-async def get_forecast(latitude: float, longtitude: float, ctx: Context) -> str:
+async def get_forecast(latitude: str, longtitude: str, ctx: Context) -> str | CallToolResult:
     """Get weather forecast for a location.
 
     Args:
@@ -88,32 +89,39 @@ async def get_forecast(latitude: float, longtitude: float, ctx: Context) -> str:
     logger.info(f"[SERVER][GET_FORECAST] Triggered")
     # First get the forecast grid endpoint
     points_url = f"{NWS_API_BASE}/points/{latitude},{longtitude}"
-    points_data = await make_nws_request(points_url)
-
-    if not points_data:
-        return "Unable to fetch forecast data for this location."
-
+    try:
+        points_data: dict = await make_nws_request(points_url)
+        # print(f">>>>>> POINT DATA: {points_data} - {type(points_data)}")
+    except Exception as e:
+        return f"Unable to fetch forecast data for this location. - {e}" 
+    
     # Get the forecast URL from the points response
     forecast_url = points_data["properties"]["forecast"]
-    forecast_data = await make_nws_request(forecast_url)
+    try:
+        forecast_data = await make_nws_request(forecast_url)
+        # print(f">>>> FC URL {forecast_data}")
+    except Exception as er:
+        return f"Failed to get the URL forecast at {forecast_url} - {er}"
+    
+    try:
+        # Format the periods into a readable forecast
+        periods = forecast_data["properties"]["periods"]
+        forecasts = []
+        for period in periods[:5]:  # Only show next 5 periods
+            forecast = f"""
+    {period['name']}:
+    Temperature: {period['temperature']}°{period['temperatureUnit']}
+    Wind: {period['windSpeed']} {period['windDirection']}
+    Forecast: {period['detailedForecast']}
+    """
+            forecasts.append(forecast)
 
-    if not forecast_data:
-        return "Unable to fetch detailed forecast."
-
-    # Format the periods into a readable forecast
-    periods = forecast_data["properties"]["periods"]
-    forecasts = []
-    for period in periods[:5]:  # Only show next 5 periods
-        forecast = f"""
-{period['name']}:
-Temperature: {period['temperature']}°{period['temperatureUnit']}
-Wind: {period['windSpeed']} {period['windDirection']}
-Forecast: {period['detailedForecast']}
-"""
-        forecasts.append(forecast)
-
-    logger.info(f"[SERVER][GET_FORECAST] Done")
-    return "\n---\n".join(forecasts)
+        logger.info(f"[SERVER][GET_FORECAST] Done")
+        return "\n---\n".join(forecasts)
+    
+    except Exception as er_final:
+        return f"Failed to get the server response with location {latitude} {longtitude} - {er_final}"
+        
 
 @mcp.tool(
     annotations={

@@ -186,7 +186,7 @@ async def call_get_forecast_tool(
 ) -> List[Dict] | CallToolResult | str | Dict:
     try:
         async with mcp_client:
-            result: str = await mcp_client.call_tool(
+            result = await mcp_client.call_tool(
                 name="get_forecast", 
                 arguments=dict(
                     latitude=tool_args.get("latitude"),
@@ -194,6 +194,12 @@ async def call_get_forecast_tool(
                 )
             )
         print(f"[TOOL CALL] Get_forecast: Result - {result}")
+        
+        if isinstance(result, CallToolResult):
+            # Process the result content - assuming result is a string
+            result_content = result.structured_content["result"]
+        elif isinstance(result, str):
+            result_content = result
         
         # Update the status of the tool call
         if result_messages and "metadata" in result_messages[-2]:
@@ -210,8 +216,6 @@ async def call_get_forecast_tool(
             }
         })
         
-        # Process the result content - assuming result is a string
-        result_content = result
         
         result_messages.append({
             "role": "assistant",
@@ -238,7 +242,7 @@ async def call_get_forecast_tool(
             }
         })
         
-    return result
+        return result
 
 async def call_get_alerts_tool(
     mcp_client: Client,
@@ -248,7 +252,7 @@ async def call_get_alerts_tool(
 ) -> List[Dict] | CallToolResult | str | Dict:
     try:
         async with mcp_client:
-            result: str = await mcp_client.call_tool(
+            result: CallToolResult | str = await mcp_client.call_tool(
                 name="get_alerts",
                 arguments=dict(
                     state=tool_args.get("state")
@@ -277,7 +281,7 @@ async def call_get_alerts_tool(
         
         result_messages.append({
             "role": "assistant",
-            "content": "```\n" + result_content + "\n```",
+            "content": "```\n" + result_content.structured_content["result"] + "\n```",
             "metadata": {
                 "parent_id": f"result_{tool_name}",
                 "id": f"raw_result_{tool_name}",
@@ -362,7 +366,7 @@ async def call_get_multiply_tool(
         
     return result
 
-def add_tool_response(
+async def add_tool_response(
     result: List[Dict] | Dict | str | CallToolResult,
     tool_id: str,
     tool_name: str
@@ -375,7 +379,10 @@ def add_tool_response(
         "content": ""
     }
     if isinstance(result, CallToolResult):
-        tool_response["content"] = result.structured_content["message"]
+        try:
+            tool_response["content"] = result.structured_content["result"]
+        except:
+            tool_response["content"] = result.structured_content["message"]
         return tool_response
     if isinstance(result, dict):
         tool_response["content"] = result["message"]
@@ -391,7 +398,7 @@ def add_tool_response(
             tool_response["content"] = result    
         return tool_response
 
-def add_image_tool_response(
+async def add_image_tool_response(
     result: str,
     tool_id: str,
     tool_name: str

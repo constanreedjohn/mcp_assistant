@@ -13,7 +13,7 @@ This is a locally hosted Chatbot with MCP integrated.
 Make sure you have llama-server installed.
 * Pull the model
 
-`llama-server -hf bartowski/Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M --port 4001 --jinja`
+`llama-server -hf bartowski/Qwen2.5-3B-Instruct-GGUF:Q5_K_S --port 4001 --jinja`
 
 2. **Install Dependencies**
 

@@ -1,4 +1,5 @@
 import requests
+import traceback
 from typing import Any
 
 from .logging_utils import logger
@@ -16,11 +17,14 @@ async def make_nws_request(url: str) -> dict[str, Any]:
     try:
         response = requests.get(url, headers=headers, timeout=30.0)
         print(f"+++ GOT RESPONSE: {response.status_code}")
-        response.raise_for_status()  # Raises an exception for 4XX/5XX responses
-        return response.json()
-    except Exception:
-        logger.info("Fail to get response")
-        return None
+        if response.status_code != 200:
+            raise Exception(f"Fail to get response - {e}")
+        else:
+            return response.json()
+    except Exception as e:
+        logger.info(f"Fail to get response - {e}")
+        logger.info(traceback.format_exc())
+        raise e
 
 def format_alert(feature: dict) -> str:
     """Format an alert feature into a readable string."""

@@ -33,7 +33,7 @@ OLLAMA_LLM_URL = os.getenv("OLLAMA_LLM_URL", "")
 
 class MCPClientWrapper:
     def __init__(self):
-        self.model_name = "Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M"
+        self.model_name = "bartowski/Qwen2.5-3B-Instruct-GGUF:Q5_K_S"
         self.mcp_client = Client(f"{MCP_SERVER_URL}/mcp")
         self.llm = AsyncOpenAI(
             base_url = f"{OLLAMA_LLM_URL}/v1",
@@ -46,15 +46,16 @@ class MCPClientWrapper:
             "role": "system", 
             "content": 
 """
-You're a chatbot assistant. Your task is to heed the user instruction and decide whether to use the functions such as: 'generate_image', 'describe_image', 'get_forecast', 'get_alerts' with their respective parameters or not.
-If the user's question are general, just response with conversational manner.
-If function are needed, response with JSON format with the required parameters.
-Use these function definitions to help you identifying the tasks:
-For function 'generate_image', you must reponse with a JSON object with three key and value pairs representing three paramters: 'prompt', 'width' and 'height'.
-For function 'describe_image', you must response with a JSON object in the 'prompt' key with prompt representing the additional detail prompt for the image description as the parameter.
-For function 'get_alerts', you must response with a JSON object with a key and value pair representing the US state in the format of two-letter (e.g CA, NY) as parameter.
-For function 'get_forecast', if the latitude and longtitude are given by the user, use that and response with a JSON object representing two key and value pairs for 'latitude' and 'longtitude' parameters. If both of those are provided, figure it out yourself.
-For function 'get_multiply', you must response with a JSON object with two key and value pairs representing the 'first_number' and the 'second_number' as parameters for the multiplication.
+You're a chatbot assistant. Your task is to heed the user query and decide whether to use the functions such as: 'generate_image', 'describe_image', 'get_forecast', 'get_alerts' with their respective parameters or not.
+Based on the the user query, decide if it is a conversation query or a functional tool request.
+If the user's query are general, just response in a conversational manner.
+If tools are needed, response with JSON format with the required parameters.
+Use these tool definitions to help you identifying the tasks:
+For tool 'generate_image', you must reponse with a JSON object with three key and value pairs representing three paramters: 'prompt', 'width' and 'height'.
+For tool 'describe_image', you must response with a JSON object in the 'prompt' key with prompt representing the additional detail prompt for the image description as the parameter.
+For tool 'get_alerts', you must response with a JSON object with a key and value pair representing the US state in the format of two-letter (e.g CA, NY) as parameter.
+For tool 'get_forecast', if the latitude and longtitude are given by the user, use that and response with a JSON object representing two key and value pairs for 'latitude' and 'longtitude' parameters. If both of those are not provided, figure it out yourself.
+For tool 'get_multiply', you must response with a JSON object with two key and value pairs representing the 'first_number' and the 'second_number' as parameters for the multiplication.
 """
         })
         
@@ -225,25 +226,25 @@ For function 'get_multiply', you must response with a JSON object with two key a
             # Retrieve the tool repsonse and add it in the LLM chat completion
             # Modify each tool response format if necessary.
             if tool_name == "generate_image":
-                tool_response: dict = add_image_tool_response(
+                tool_response: dict = await add_image_tool_response(
                     result=tool_args.get("prompt", ""),
                     tool_id=tool_id,
                     tool_name=tool_name
                 )
             elif tool_name == "describe_image":
-                tool_response: dict = add_tool_response(
+                tool_response: dict = await add_tool_response(
                     tool_name=tool_name,
                     result=result,
                     tool_id=tool_id
                 )
             elif tool_name == "get_multiply":
-                tool_response: dict = add_tool_response(
+                tool_response: dict = await add_tool_response(
                     tool_name=tool_name,
                     result=result,
                     tool_id=tool_id
                 )
             elif tool_name == "get_alerts" or tool_name == "get_forecast":
-                tool_response: dict = add_tool_response(
+                tool_response: dict = await add_tool_response(
                     tool_name=tool_name,
                     result=result,
                     tool_id=tool_id
