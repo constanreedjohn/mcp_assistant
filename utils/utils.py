@@ -18,13 +18,13 @@ async def make_nws_request(url: str) -> dict[str, Any]:
         response = requests.get(url, headers=headers, timeout=30.0)
         print(f"+++ GOT RESPONSE: {response.status_code}")
         if response.status_code != 200:
-            raise Exception(f"Fail to get response - {e}")
+            return Exception(f"Fail to get response")
         else:
             return response.json()
     except Exception as e:
         logger.info(f"Fail to get response - {e}")
         logger.info(traceback.format_exc())
-        raise e
+        return e
 
 def format_alert(feature: dict) -> str:
     """Format an alert feature into a readable string."""
