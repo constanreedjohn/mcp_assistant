@@ -7,7 +7,7 @@ import torch
 from contextlib import asynccontextmanager
 from transformers import AutoModelForCausalLM
 from qwen_asr import Qwen3ASRModel
-from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
+# from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
 
 from deepseek_vl.models import VLChatProcessor, MultiModalityCausalLM
 from deepseek_vl.utils.io import load_pil_images
@@ -22,11 +22,11 @@ def load_asr():
     )
     return asr_model
 
-def load_diffuser():
-    image_model = DiffusionPipeline.from_pretrained("stabilityai/stable-diffusion-2", use_safetensors=True, safety_checker=None).to("mps")
-    image_model.scheduler = EulerDiscreteScheduler.from_config(image_model.scheduler.config)
-    image_model.enable_attention_slicing()
-    return image_model
+# def load_diffuser():
+#     image_model = DiffusionPipeline.from_pretrained("stabilityai/stable-diffusion-2", use_safetensors=True, safety_checker=None).to("mps")
+#     image_model.scheduler = EulerDiscreteScheduler.from_config(image_model.scheduler.config)
+#     image_model.enable_attention_slicing()
+#     return image_model
 
 def load_visual_llm():
     # Initialize DeepSeek-VL model and processor
@@ -70,45 +70,45 @@ app = FastAPI(title="API SERVER", lifespan=lifespan)
 def get_server_health():
     return {"status": "ok"}
 
-@app.get("/image/generate")
-async def generate_image(prompt: str, width: int = 512, height: int = 512) -> dict:
-    """Generate an image using local model.
+# @app.get("/image/generate")
+# async def generate_image(prompt: str, width: int = 512, height: int = 512) -> dict:
+#     """Generate an image using local model.
     
-    Args:
-        prompt: Text prompt describing the image to generate
-        width: Image width (default: 512)
-        height: Image height (default: 512)
-    """
-    print(f"[SERVER][GEN_LOCAL_IMAGE] Triggered")
-    try:
-        # Generate the image
-        image = img_model(prompt, num_inference_steps=25).images[0]
+#     Args:
+#         prompt: Text prompt describing the image to generate
+#         width: Image width (default: 512)
+#         height: Image height (default: 512)
+#     """
+#     print(f"[SERVER][GEN_LOCAL_IMAGE] Triggered")
+#     try:
+#         # Generate the image
+#         image = img_model(prompt, num_inference_steps=25).images[0]
         
-        # Save image to file (optional, you can keep or remove this)
-        image.save("./result.png")
+#         # Save image to file (optional, you can keep or remove this)
+#         image.save("./result.png")
         
-        # Convert image to bytes for the API response
-        buffered = BytesIO()
-        image.save(buffered, format="PNG")
-        img_bytes = buffered.getvalue()
+#         # Convert image to bytes for the API response
+#         buffered = BytesIO()
+#         image.save(buffered, format="PNG")
+#         img_bytes = buffered.getvalue()
         
-        # Encode as base64 for JSON response
-        img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+#         # Encode as base64 for JSON response
+#         img_base64 = base64.b64encode(img_bytes).decode('utf-8')
         
-        print(f"[SERVER][GEN_LOCAL_IMAGE] Done")
-        return {
-            "status": "success",
-            "message": f"Generated image for prompt: {prompt}",
-            "image_bytes": img_base64
-        }
+#         print(f"[SERVER][GEN_LOCAL_IMAGE] Done")
+#         return {
+#             "status": "success",
+#             "message": f"Generated image for prompt: {prompt}",
+#             "image_bytes": img_base64
+#         }
         
-    except Exception as e:
-        print(f"[SERVER][GEN_LOCAL_IMAGE] Error: {str(e)}")
-        return {
-            "status": "error",
-            "message": f"Error generating image: {str(e)}",
-            "image_bytes": None
-        }
+#     except Exception as e:
+#         print(f"[SERVER][GEN_LOCAL_IMAGE] Error: {str(e)}")
+#         return {
+#             "status": "error",
+#             "message": f"Error generating image: {str(e)}",
+#             "image_bytes": None
+#         }
 
 @app.get("/image/describe")
 async def describe_image(request: Request, prompt: str, file_byte: str) -> dict:
