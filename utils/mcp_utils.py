@@ -1,8 +1,9 @@
 import json
 import base64
 import traceback
+import numpy as np
 from fastmcp import Client
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from io import BytesIO
 from PIL import Image
 from fastmcp.client.client import CallToolResult
@@ -365,6 +366,71 @@ async def call_get_multiply_tool(
         })
         
     return result
+
+async def call_transcribe_audio_tool(
+    mcp_client: Client,
+    file_byte: Tuple[np.ndarray, int],
+    tool_args: Dict,
+    result_messages: List[Dict],
+    tool_name: str
+) -> List[Dict] | CallToolResult | str | Dict:
+    try:
+        wav, sr = file_byte
+        async with mcp_client:
+            result: CallToolResult = await mcp_client.call_tool(
+                name="transcribe_audio",
+                arguments=dict(
+                    audio_data=tool_args.get("audio_data", ""),
+                    sample_rate=tool_args.get("sample_rate", 0)
+                )
+            )
+        
+        # Update the status of the tool call
+        if result_messages and "metadata" in result_messages[-2]:
+            result_messages[-2]["metadata"]["status"] = "done"
+        
+        # Add a header for the tool results
+            result_messages.append({
+                "role": "assistant",
+                "content": "Here are the results from the tool:",
+                "metadata": {
+                    "title": f"Tool Result for {tool_name}",
+                    "status": "done",
+                    "id": f"result_{tool_name}"
+                }
+            })
+    except Exception as e:
+        print(traceback.format_exc(), e)
+        result = "Fail to get the server response."
+        result_messages.append({
+            "role": "assistant",
+            "content": "```\n" + result + "\n```",
+            "metadata": {
+                "parent_id": f"result_{tool_name}",
+                "id": f"raw_result_{tool_name}",
+                "status": "done",
+                "title": "Raw Output"
+            }
+        })
+        raise Exception(e)
+        
+    print(f"[TOOL CALL] Transcribe_audio: Result - {result} - {type(result)}")
+    # Process the result content - assuming result is a string
+    result_content: dict = result.structured_content
+    content_message = f"The transcription of the audio is {result_content['message']}"
+    
+    result_messages.append({
+        "role": "assistant",
+        "content": "```\n" + content_message + "\n```",
+        "metadata": {
+            "parent_id": f"result_{tool_name}",
+            "id": f"raw_result_{tool_name}",
+            "title": "Raw Output",
+            "status": "done",
+        }
+    })
+        
+    return content_message
 
 async def add_tool_response(
     result: List[Dict] | Dict | str | CallToolResult,

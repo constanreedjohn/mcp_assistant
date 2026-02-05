@@ -7,6 +7,8 @@ from PIL import Image
 import os
 import io
 import base64
+import numpy as np
+import soundfile as sf
 from fastmcp import Client
 from typing import List, Dict, Any, Union
 import gradio as gr
@@ -15,12 +17,14 @@ from gradio.components.chatbot import ChatMessage
 from fastmcp.client.client import CallToolResult
 
 from .tools import tool_definition_list
+from .utils import _read_wav_from_bytes
 from .mcp_utils import (
     call_image_generation_tool,
     call_image_describe_tool,
     call_get_forecast_tool,
     call_get_alerts_tool,
     call_get_multiply_tool,
+    call_transcribe_audio_tool,
     add_tool_response,
     add_image_tool_response
 )
@@ -73,14 +77,31 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
             tools = await self.mcp_client.list_tools()
             print(f"Connected to MCP server. Available tools: {', '.join([t.name for t in tools])}")
 
-    async def process_message(self, message: str, history: List[Union[Dict[str, Any], ChatMessage]], img):
-        # Initialize image_data to None
+    async def process_message(self, text_query: str, history: List[Union[Dict[str, Any], ChatMessage]], upload_media=None):
+        # Initialize image_data and audio_data to None
         image_data = None
+        audio_data = None
+        
+        # Determine file type
+        file_path = upload_media.name if hasattr(upload_media, 'name') else upload_media
+        
+        if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+            # Process image
+            image_data = Image.open(upload_media)
+        elif file_path.lower().endswith(('.wav', '.mp3')):
+            try:
+                wav, sr = sf.read(upload_media, dtype="float32", always_2d=False)
+            except:
+                audio_bytes = upload_media.read()
+                wav, sr = _read_wav_from_bytes(audio_bytes)
+                
+            audio_data = (wav, sr)
         
         # Async generator to stream partial responses from _process_query
-        async for partial_messages, partial_image_data in self._process_query(message, history, img):
+        async for partial_messages, partial_image_data, partial_audio_data in self._process_query(text_query, history, image_data, audio_data):
             image_data = partial_image_data
-            yield history + partial_messages, gr.Textbox(value=""), image_data
+            audio_data = partial_audio_data
+            yield history + partial_messages, gr.Textbox(value=""), image_data, audio_data
 
     async def _get_model_response_tool(self, message: str, history: List[Union[Dict[str, Any], ChatMessage]]):
         response = await self.llm.chat.completions.create(
@@ -91,7 +112,7 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
         )
         return response
     
-    async def _process_query(self, message: str, history: List[Union[Dict[str, Any], ChatMessage]], img):
+    async def _process_query(self, text_query: str, history: List[Union[Dict[str, Any], ChatMessage]], img: Image.Image, audio: np.ndarray = None):
         self.result_messages = []
         
         for msg in history:
@@ -111,20 +132,21 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
         # Get the first choice from response
         choice = response.choices[0]
         print(f"[FIRST CHOICE] - {choice}")
-        message = choice.message
+        first_response = choice.message
         
         image_data = None
+        audio_data = None
         
         # Handle regular text response
-        if not message.tool_calls:
+        if not first_response.tool_calls:
             self.result_messages.append({
                 "role": "assistant",
-                "content": message.content
+                "content": first_response.content
             })
-            print(f"[RESULT MES] - First res: {message.content}")
+            print(f"[RESULT MES] - First res: {first_response.content}")
         else:
             # Handle tool calls like in your Anthropic code
-            for tool_call in message.tool_calls:
+            for tool_call in first_response.tool_calls:
                 tool_id = tool_call.id
                 tool_name = tool_call.function.name
                 print(f"[TOOL] - {tool_id} - {tool_name}")
@@ -184,6 +206,14 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
                         result_messages=self.result_messages,
                         tool_name=tool_name
                     )
+                elif tool_name == "transcribe_audio":
+                    result: CallToolResult | str = await call_transcribe_audio_tool(
+                        file_byte=audio_data,
+                        mcp_client=self.mcp_client,
+                        tool_args=tool_args,
+                        result_messages=self.result_messages,
+                        tool_name=tool_name
+                    )
                 elif tool_name == "get_forecast":
                     result: CallToolResult | list[dict] | str = await call_get_forecast_tool(
                         mcp_client=self.mcp_client,
@@ -231,7 +261,7 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
                     tool_id=tool_id,
                     tool_name=tool_name
                 )
-            elif tool_name == "describe_image":
+            elif tool_name == "describe_image" or tool_name == "transcribe_audio":
                 tool_response: dict = await add_tool_response(
                     tool_name=tool_name,
                     result=result,
@@ -266,4 +296,4 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
             if chunk.choices[0].delta.content is not None:
                 partial_content += chunk.choices[0].delta.content
                 # Yield partial messages with updated content
-                yield [{"role": "assistant", "content": partial_content}], image_data
+                yield [{"role": "assistant", "content": partial_content}], image_data, audio_data

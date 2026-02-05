@@ -51,6 +51,28 @@ def get_tool_definition():
     {
         "type": "function",
         "function": {
+            "name": "transcribe_audio",
+            "description": "Transcribe from a given audio file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "audio_data": {
+                        "type": "np.ndarray",
+                        "description": "The numpy ndarray data represent the audio bytes."
+                    },
+                    "sample_rate": {
+                        "type": "integer",
+                        "description": "The sample rate of the audio bytes."
+                    },
+                },
+                "required": ["audio_data", "sample_rate"]
+            },
+            "strict": True,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_alerts",
             "description": "Get weather alerts for a US state from an API.",
             "parameters": {
