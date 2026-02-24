@@ -172,10 +172,10 @@ async def describe_image(request: Request, prompt: str, file_byte: str) -> dict:
         }
 
 @app.get("/audio/transcribe")
-async def transcribe_audio(request: Request, audio_data: list, sample_rate: int):
+async def transcribe_audio(request: Request, prompt: str, file_path: str):
     asr_model: Qwen3ASRModel = request.app.state.asr_model
     try:
-        input_data = (audio_data, sample_rate)
+        input_data = "../input_audio.wav"
         result = asr_model.transcribe(
             audio=input_data,
             language=None,

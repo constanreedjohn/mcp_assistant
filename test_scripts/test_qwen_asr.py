@@ -18,7 +18,8 @@ print(f"=== LOADED BASE MODEL...")
 
 start_2 = time.perf_counter()
 results_2 = model_2.transcribe(
-    audio="https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-ASR-Repo/asr_en.wav",
+    # audio="https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-ASR-Repo/asr_en.wav",
+    audio="../input_audio.wav",
     language=None, # set "English" to force the language
 )
 end_2 = time.perf_counter()

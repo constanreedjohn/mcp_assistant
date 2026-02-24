@@ -56,16 +56,12 @@ def get_tool_definition():
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "audio_data": {
-                        "type": "np.ndarray",
-                        "description": "The numpy ndarray data represent the audio bytes."
-                    },
-                    "sample_rate": {
-                        "type": "integer",
-                        "description": "The sample rate of the audio bytes."
+                    "prompt": {
+                        "type": "string",
+                        "description": "Text prompt about the detail requirement for the audio file."
                     },
                 },
-                "required": ["audio_data", "sample_rate"]
+                "required": ["prompt"]
             },
             "strict": True,
         },

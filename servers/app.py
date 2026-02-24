@@ -21,7 +21,7 @@ def gradio_interface():
         chat_history = chat_history + [{"role": "user", "content": message}]
         
         # Yield the updated chat history and clear the input box immediately
-        yield chat_history, "", None, None, None
+        yield chat_history, "", None, None
         
         # Now stream the assistant's response and update the chat
         async for updated_history, textbox, image_data, audio_data in client.process_message(message, chat_history, upload_media):
@@ -41,8 +41,6 @@ def gradio_interface():
                 chatbot = gr.Chatbot(
                     value=[], 
                     height=500,
-                    type="messages",
-                    show_copy_button=True,
                     avatar_images=("👤", "🤖")
                 )
                 
@@ -94,7 +92,7 @@ def gradio_interface():
             msg.submit(
                 submit_message, 
                 inputs=[msg, chatbot, upload_file], 
-                outputs=[chatbot, msg, upload_file]
+                outputs=[chatbot, msg, upload_file, upload_file]
             )
             
             clear_btn.click(

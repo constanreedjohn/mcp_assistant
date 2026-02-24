@@ -1,7 +1,9 @@
+import os
 import json
 import base64
 import traceback
 import numpy as np
+import soundfile as sf
 from fastmcp import Client
 from typing import List, Dict, Optional, Tuple
 from io import BytesIO
@@ -369,19 +371,22 @@ async def call_get_multiply_tool(
 
 async def call_transcribe_audio_tool(
     mcp_client: Client,
-    file_byte: Tuple[np.ndarray, int],
+    audio_data: Tuple[List, int],
     tool_args: Dict,
     result_messages: List[Dict],
     tool_name: str
 ) -> List[Dict] | CallToolResult | str | Dict:
     try:
-        wav, sr = file_byte
+        # print(f"GOT MCP AUDIO DATA: {audio_data}")
+        wav, sr = audio_data
+        input_audio_path = "../input_audio.wav"
+        sf.write(input_audio_path, wav, sr)
+        
         async with mcp_client:
             result: CallToolResult = await mcp_client.call_tool(
                 name="transcribe_audio",
                 arguments=dict(
-                    audio_data=tool_args.get("audio_data", ""),
-                    sample_rate=tool_args.get("sample_rate", 0)
+                    prompt=tool_args.get("prompt", "")
                 )
             )
         
