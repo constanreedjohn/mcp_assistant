@@ -2,6 +2,10 @@
 
 This is a locally hosted Chatbot with MCP integrated.
 
+## Overall flow:
+
+![Overall Flow](./mcp_weather.svg)
+
 ## Overall features:
 
 - Locally hosted LLM: The chatbot uses Ollama LLM model and deploy on local machine
