@@ -2,34 +2,34 @@ from typing import List, Dict, Any, Union
 
 def get_tool_definition():
     return [
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_image",
-            "description": "Generate an image using SanaSprint model with the output of three parameters: 'prompt', 'width', 'height'",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "Text prompt describing the image to generate"
-                    },
-                    "width": {
-                        "type": "integer",
-                        "description": "Image width (default: 512)",
-                        "default": 512
-                    },
-                    "height": {
-                        "type": "integer",
-                        "description": "Image height (default: 512)",
-                        "default": 512
-                    }
-                },
-                "required": ["prompt"]
-            },
-            "strict": True,
-        },
-    },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "generate_image",
+    #         "description": "Generate an image using SanaSprint model with the output of three parameters: 'prompt', 'width', 'height'",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "prompt": {
+    #                     "type": "string",
+    #                     "description": "Text prompt describing the image to generate"
+    #                 },
+    #                 "width": {
+    #                     "type": "integer",
+    #                     "description": "Image width (default: 512)",
+    #                     "default": 512
+    #                 },
+    #                 "height": {
+    #                     "type": "integer",
+    #                     "description": "Image height (default: 512)",
+    #                     "default": 512
+    #                 }
+    #             },
+    #             "required": ["prompt"]
+    #         },
+    #         "strict": True,
+    #     },
+    # },
     {
         "type": "function",
         "function": {
@@ -41,6 +41,24 @@ def get_tool_definition():
                     "prompt": {
                         "type": "string",
                         "description": "Text prompt about the detail requirement for the image description."
+                    },
+                },
+                "required": ["prompt"]
+            },
+            "strict": True,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "transcribe_audio",
+            "description": "Transcribe from a given audio file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Text prompt about the detail requirement for the audio file."
                     },
                 },
                 "required": ["prompt"]

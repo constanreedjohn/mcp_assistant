@@ -1,0 +1,43 @@
+[project]
+name = "mcp-assistant"
+version = "0.1.0"
+description = "MCP Application with locally hosted LLM and MCP tools"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.131.0",
+    "fastapi-cli>=0.0.7",
+    "fastapi-mcp>=0.3.3",
+    "fastmcp>=2.10.4",
+    "gradio>=6.6.0",
+    "huggingface-hub>=0.36.2",
+    "mcp>=1.10.1",
+    "numpy>=2.4.2",
+    "openai>=1.77.0",
+    "torch>=2.10.0",
+    "torchaudio",
+    "torchvision",
+    "python-dotenv",
+    "requests>=2.32.5",
+    "tqdm>=4.67.3",
+    "pydantic>=2.12.5",
+    "transformers>=4.57.6",
+    "uvicorn>=0.41.0",
+    "uvloop",
+    "timm>=0.9.16",
+    "sentencepiece",
+    "attrdict",
+    "einops",
+    "accelerate>=1.12.0",
+    "qwen-asr>=0.0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["servers", "utils"]
+
+[tool.uv]
+dev-dependencies = []
+
