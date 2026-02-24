@@ -10,13 +10,14 @@ import base64
 import numpy as np
 import soundfile as sf
 from fastmcp import Client
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Tuple
 import gradio as gr
 from openai import AsyncOpenAI
 from gradio.components.chatbot import ChatMessage
 from fastmcp.client.client import CallToolResult
 
 from .tools import tool_definition_list
+from .logging_utils import logger
 from .utils import _read_wav_from_bytes
 from .mcp_utils import (
     call_image_generation_tool,
@@ -50,12 +51,12 @@ class MCPClientWrapper:
             "role": "system", 
             "content": 
 """
-You're a chatbot assistant. Your task is to heed the user query and decide whether to use the functions such as: 'generate_image', 'describe_image', 'get_forecast', 'get_alerts' with their respective parameters or not.
+You're a chatbot assistant. Your task is to heed the user query and decide whether to use the functions such as: 'transcribe_audio', 'describe_image', 'get_forecast', 'get_alerts' with their respective parameters or not.
 Based on the the user query, decide if it is a conversation query or a functional tool request.
 If the user's query are general, just response in a conversational manner.
 If tools are needed, response with JSON format with the required parameters.
 Use these tool definitions to help you identifying the tasks:
-For tool 'generate_image', you must reponse with a JSON object with three key and value pairs representing three paramters: 'prompt', 'width' and 'height'.
+For tool 'transcribe_audio', you must reponse with a JSON object in the 'prompt' key with prompt representing the additional detail prompt for the audio transcription as the parameter.
 For tool 'describe_image', you must response with a JSON object in the 'prompt' key with prompt representing the additional detail prompt for the image description as the parameter.
 For tool 'get_alerts', you must response with a JSON object with a key and value pair representing the US state in the format of two-letter (e.g CA, NY) as parameter.
 For tool 'get_forecast', if the latitude and longtitude are given by the user, use that and response with a JSON object representing two key and value pairs for 'latitude' and 'longtitude' parameters. If both of those are not provided, figure it out yourself.
@@ -66,16 +67,16 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
     async def check_connection(self):
         async with self.mcp_client:
             await self.mcp_client.ping()
-            print("Server is reachable")
+            logger.info("Server is reachable")
     
     async def _connect(self) -> str:
         async with self.mcp_client:
             self.mcp_client.session.__aenter__
-            print(f"Client connected: {self.mcp_client.is_connected()}")
+            logger.info(f"Client connected: {self.mcp_client.is_connected()}")
 
             # Make MCP calls within the context
             tools = await self.mcp_client.list_tools()
-            print(f"Connected to MCP server. Available tools: {', '.join([t.name for t in tools])}")
+            logger.info(f"Connected to MCP server. Available tools: {', '.join([t.name for t in tools])}")
 
     async def process_message(self, text_query: str, history: List[Union[Dict[str, Any], ChatMessage]], upload_media=None):
         # Initialize image_data and audio_data to None
@@ -83,19 +84,25 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
         audio_data = None
         
         # Determine file type
-        file_path = upload_media.name if hasattr(upload_media, 'name') else upload_media
+        if upload_media:
+            file_path = upload_media.name if hasattr(upload_media, 'name') else upload_media
         
-        if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-            # Process image
-            image_data = Image.open(upload_media)
-        elif file_path.lower().endswith(('.wav', '.mp3')):
-            try:
-                wav, sr = sf.read(upload_media, dtype="float32", always_2d=False)
-            except:
-                audio_bytes = upload_media.read()
-                wav, sr = _read_wav_from_bytes(audio_bytes)
+            if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+                # Process image
+                image_data = Image.open(upload_media)
+            elif file_path.lower().endswith(('.wav', '.mp3')):
+                try:
+                    # Try to read and save as wav
+                    wav, sr = sf.read(upload_media, dtype="float32", always_2d=False)
+                    # sf.write(input_audio_path, wav, sr)
+                except:
+                    # If reading fails, try to read from bytes and convert
+                    audio_bytes = upload_media.read()
+                    wav, sr = _read_wav_from_bytes(audio_bytes)
+                    # sf.write(input_audio_path, wav, sr)
                 
-            audio_data = (wav, sr)
+                audio_data = (wav, sr) if (wav, sr) else (None, None)
+                # logger.info(f"GOT AUDIO DATA: {audio_data}")
         
         # Async generator to stream partial responses from _process_query
         async for partial_messages, partial_image_data, partial_audio_data in self._process_query(text_query, history, image_data, audio_data):
@@ -112,7 +119,7 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
         )
         return response
     
-    async def _process_query(self, text_query: str, history: List[Union[Dict[str, Any], ChatMessage]], img: Image.Image, audio: np.ndarray = None):
+    async def _process_query(self, text_query: str, history: List[Union[Dict[str, Any], ChatMessage]], img: Image.Image = None, audio_bytes: tuple[List, int] = None):
         self.result_messages = []
         
         for msg in history:
@@ -126,16 +133,16 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
         
         # self.claude_messages.append({"role": "user", "content": message})
         
-        print(f"[MESSAGE FIRST] - {self.claude_messages}")
+        logger.info(f"[MESSAGE FIRST] - {self.claude_messages}")
         response = await self._get_model_response_tool(self.claude_messages, history=history)
         
         # Get the first choice from response
         choice = response.choices[0]
-        print(f"[FIRST CHOICE] - {choice}")
+        logger.info(f"[FIRST CHOICE] - {choice}")
         first_response = choice.message
         
-        image_data = None
-        audio_data = None
+        output_image_byte = None
+        output_audio_data = None
         
         # Handle regular text response
         if not first_response.tool_calls:
@@ -143,13 +150,13 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
                 "role": "assistant",
                 "content": first_response.content
             })
-            print(f"[RESULT MES] - First res: {first_response.content}")
+            logger.info(f"[RESULT MES] - First res: {first_response.content}")
         else:
             # Handle tool calls like in your Anthropic code
             for tool_call in first_response.tool_calls:
                 tool_id = tool_call.id
                 tool_name = tool_call.function.name
-                print(f"[TOOL] - {tool_id} - {tool_name}")
+                logger.info(f"[TOOL] - {tool_id} - {tool_name}")
                 
                 # Try to parse tool arguments
                 try:
@@ -180,11 +187,11 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
                     }
                 })
                 
-                print(f"[RESULT MES] AFTER TOOL: {self.result_messages}")
+                logger.info(f"[RESULT MES] AFTER TOOL: {self.result_messages}")
                 
                 result = "Fail to get the server response"
                 
-                print(f"TOOL ARGS: {tool_args}")
+                logger.info(f"TOOL ARGS: {tool_args}")
                 if tool_name == "generate_image":
                     result: CallToolResult | list[dict] | list = await call_image_generation_tool(
                         mcp_client=self.mcp_client,
@@ -197,7 +204,7 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
                         image_bytes = base64.b64decode(result.data)
                         # Convert bytes to PIL Image
                         image = Image.open(io.BytesIO(image_bytes))
-                        image_data = image
+                        output_image_byte = image
                 elif tool_name == "describe_image":
                     result: CallToolResult | str = await call_image_describe_tool(
                         file_byte=img,
@@ -208,7 +215,7 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
                     )
                 elif tool_name == "transcribe_audio":
                     result: CallToolResult | str = await call_transcribe_audio_tool(
-                        file_byte=audio_data,
+                        audio_data=audio_bytes,
                         mcp_client=self.mcp_client,
                         tool_args=tool_args,
                         result_messages=self.result_messages,
@@ -235,7 +242,7 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
                         result_messages=self.result_messages,
                         tool_name=tool_name
                     )
-                print(f"[RESULT MES] RESULT TOOL CALL MESSAGE: {self.result_messages}")
+                logger.info(f"[RESULT MES] RESULT TOOL CALL MESSAGE: {self.result_messages}")
             
             # Get model to respond to tool output (second call)
             # Add tool results to messages
@@ -280,10 +287,10 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
                     tool_id=tool_id
                 )
                 
-            print(f"[TOOL RESPONSE] {tool_response}")
+            logger.info(f"[TOOL RESPONSE] {tool_response}")
             self.claude_messages.append(tool_response)
         
-        print(f"[FINAL_MESSAGE] GOT CLAUDE MESSAGE: {self.claude_messages}")
+        logger.info(f"[FINAL_MESSAGE] GOT CLAUDE MESSAGE: {self.claude_messages}")
         # Get final response after tool use
         final_response = await self.llm.chat.completions.create(
             model=self.model_name,
@@ -296,4 +303,4 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
             if chunk.choices[0].delta.content is not None:
                 partial_content += chunk.choices[0].delta.content
                 # Yield partial messages with updated content
-                yield [{"role": "assistant", "content": partial_content}], image_data, audio_data
+                yield [{"role": "assistant", "content": partial_content}], output_image_byte, output_audio_data
