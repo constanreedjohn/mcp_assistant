@@ -30,24 +30,24 @@ def get_tool_definition():
     #         "strict": True,
     #     },
     # },
-    {
-        "type": "function",
-        "function": {
-            "name": "describe_image",
-            "description": "Describe the image with the appropriate prompt.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "Text prompt about the detail requirement for the image description."
-                    },
-                },
-                "required": ["prompt"]
-            },
-            "strict": True,
-        },
-    },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "describe_image",
+    #         "description": "Describe the image with the appropriate prompt.",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "prompt": {
+    #                     "type": "string",
+    #                     "description": "Text prompt about the detail requirement for the image description."
+    #                 },
+    #             },
+    #             "required": ["prompt"]
+    #         },
+    #         "strict": True,
+    #     },
+    # },
     {
         "type": "function",
         "function": {

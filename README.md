@@ -16,11 +16,13 @@ This is a locally hosted Chatbot with MCP integrated.
 
 **1. LLM with llama-server**
 
-Make sure you have llama-server installed.
+Make sure you have llama.cpp installed.
+
+`brew install llama.cpp`
 
 - Pull the model
 
-`llama-server -hf bartowski/Qwen2.5-3B-Instruct-GGUF:Q5_K_S --port 4001 --jinja`
+  `llama-server -hf bartowski/Qwen_Qwen3.5-0.8B-GGUF:Q5_K_M -n 5 --port 4001 --jinja`
 
 **2. Install Dependencies**
 

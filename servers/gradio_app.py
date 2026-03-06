@@ -1,3 +1,7 @@
+"""
+Gradio UI for the MCP Weather Assistant.
+Provides a chat interface for interacting with the MCP server.
+"""
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -6,23 +10,30 @@ from dotenv import load_dotenv
 load_dotenv("./env.dev")
 
 import asyncio
-from PIL import Image
 import gradio as gr
 from gradio.components.chatbot import ChatMessage
-from utils.mcp_client_wrapper import MCPClientWrapper
-from utils.utils import normalize_audios, _read_wav_from_bytes
 
-client = MCPClientWrapper()
+from utils.mcp_client_wrapper import MCPClientWrapper
+from config import GRADIO_HOST, GRADIO_PORT
+
 
 def gradio_interface():
+    """Create and configure the Gradio interface."""
+    
     async def submit_message(message, chat_history, upload_media):
-        # Immediately append the user's message to chat history
+        """Handle message submission and stream responses."""
+        # Initialize chat history if None
         if chat_history is None:
             chat_history = []
+        
+        # Immediately append the user's message to chat history
         chat_history += [{"role": "user", "content": message}]
         
         # Yield the updated chat history and clear the input box immediately
         yield chat_history, "", None, None
+        
+        # Create a new client for each request to avoid state issues
+        client = MCPClientWrapper()
         
         # Now stream the assistant's response and update the chat
         async for updated_history, textbox, image_data, audio_data in client.process_message(message, chat_history, upload_media):
@@ -62,7 +73,6 @@ def gradio_interface():
                 
                 # Image upload section with icon
                 with gr.Group():
-                    
                     upload_file = gr.File(
                         label="Upload Image/Audio file",
                         file_count="single",
@@ -76,7 +86,6 @@ def gradio_interface():
                 output_audio = gr.Audio(
                     label="Generated Audio",
                     interactive=False,
-                    # height=60,
                     show_label=False
                 )
                 
@@ -85,61 +94,41 @@ def gradio_interface():
                 # Image display section
                 display_image = gr.Image(
                     label="Generated Image",
-                    # max_height=150,
                     show_label=False
                 )
-                
+            
             # Connect the components
             msg.submit(
                 submit_message, 
                 inputs=[msg, chatbot, upload_file], 
-                outputs=[chatbot, msg, upload_file, upload_file]
+                outputs=[chatbot, msg, display_image, output_audio]
             )
             
             clear_btn.click(
                 lambda: ([], None, None, None), 
                 None, 
-                [chatbot, upload_file]
+                [chatbot, upload_file, display_image, output_audio]
             )
             
-            # Debug media
-            # def process_file(file):
-            #     if file is None:
-            #         return None, None
-                
-            #     # Determine file type
-            #     file_path = file.name if hasattr(file, 'name') else file
-                
-            #     if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-            #         # Process image
-            #         image_data = Image.open(file)
-                    
-            #         return None, image_data
-            #     else:
-            #         try:
-            #             with open(file, 'rb') as f:
-            #                 audio_bytes = f.read()
-            #         except:
-            #             audio_bytes = file.read()
-                        
-            #         audio_data, sr = _read_wav_from_bytes(audio_bytes)
-            #         print(audio_data, sr)
-            #         return (sr, audio_data), None
-                
-            # process_btn.click(
-            #     fn=process_file,
-            #     inputs=[upload_file],
-            #     outputs=[output_audio, display_image]
-            # )
-        return demo
+    return demo
+
 
 async def main():
+    """Main entry point for the Gradio app."""
+    # Test connection to MCP server
     client = MCPClientWrapper()
-    
     await client.check_connection()
     await client._connect()
+    
+    # Launch Gradio interface
     interface = gradio_interface()
-    interface.launch(debug=True)
+    interface.launch(
+        server_name=GRADIO_HOST,
+        server_port=GRADIO_PORT,
+        debug=True
+    )
+
 
 if __name__ == "__main__":
     asyncio.run(main())
+

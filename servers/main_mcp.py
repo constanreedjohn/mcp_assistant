@@ -13,9 +13,8 @@ from fastmcp.client.client import CallToolResult
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from utils.logging_utils import logger
-from utils.utils import make_nws_request, format_alert, NWS_API_BASE
-
-IMAGE_GEN_URL = os.getenv("IMAGE_GEN_URL", "")
+from utils.weather_utils import make_nws_request, format_alert
+from config import NWS_API_BASE, IMAGE_GEN_URL
 
 mcp = FastMCP(name="MainMcpServer")
 

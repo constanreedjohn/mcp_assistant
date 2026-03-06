@@ -10,6 +10,8 @@ from io import BytesIO
 from PIL import Image
 from fastmcp.client.client import CallToolResult
 
+from utils.constants import DEFAULT_INPUT_AUDIO, DEFAULT_INPUT_IMAGE
+
 
 async def call_image_generation_tool(
     mcp_client: Client, 
@@ -123,7 +125,7 @@ async def call_image_describe_tool(
 ) -> List[Dict] | CallToolResult | str | Dict:
     
     try:
-        file_byte.save("../input.jpg")
+        file_byte.save(DEFAULT_INPUT_IMAGE)
         async with mcp_client:
             # Convert bytes to base64 string for sending
             # b64_image = base64.b64encode(file_bytes).decode('utf-8')
@@ -380,7 +382,7 @@ async def call_transcribe_audio_tool(
         # print(f"GOT MCP AUDIO DATA: {audio_data}")
         wav, sr = audio_data
         input_audio_path = "../input_audio.wav"
-        sf.write(input_audio_path, wav, sr)
+        sf.write(DEFAULT_INPUT_AUDIO, wav, sr)
         
         async with mcp_client:
             result: CallToolResult = await mcp_client.call_tool(
