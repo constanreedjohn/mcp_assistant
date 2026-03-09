@@ -15,6 +15,7 @@ from .audio_utils import (
     normalize_audios,
     read_wav_from_bytes,
     save_audio_to_file,
+    encode_image,
     AudioLike,
 )
 

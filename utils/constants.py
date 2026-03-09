@@ -23,7 +23,7 @@ USER_AGENT: str = "weather-app/1.0"
 # Model Configuration
 # ============================================================================
 
-DEFAULT_LLM_MODEL: str = "bartowski/Qwen2.5-3B-Instruct-GGUF:Q5_K_S"
+DEFAULT_LLM_MODEL: str = "bartowski/Qwen_Qwen3.5-2B-GGUF:Q4_1"
 DEFAULT_SLM_MODEL: str = "bartowski/Qwen_Qwen3.5-0.8B-GGUF:Q5_K_M"
 
 # ============================================================================
@@ -68,14 +68,9 @@ INTENT_CLASSIFIER_PROMPT = """You are an intent classifier, your task is to repo
 -------------
 RULES:
 * Based on the context of the QUERY, response with only 'tool' or 'chat'.
-* If the QUERY contains context relevant to the definitions from the CONTEXT_DEFINITION, response 'tool'.
-* If the QUERY contains context unrelated from the CONTEXT_DEFINITION or just a general conversation knowledge, then response 'chat'.
+* If the QUERY contains relevant information relate to these keywords: ['transcribe audio', 'provide weather forecast', 'provide weather alerts'], response 'tool'.
+* If the QUERY does not contain relevant information in those keywords or just a general conversation knowledge, then response 'chat'.
 -------------
-CONTEXT_DEFINITION
-* When the QUERY is asking to transcribe an audio file from an uploaded file.
-* When the QUERY is asking to check the weather alerts.
-* When the QUERY is asking to check the weather forecast.
-* When the QUERY is asking for a multiplication
---------------
+QUERY: {query_message}
 """
 

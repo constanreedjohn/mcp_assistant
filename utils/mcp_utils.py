@@ -424,7 +424,7 @@ async def call_transcribe_audio_tool(
     print(f"[TOOL CALL] Transcribe_audio: Result - {result} - {type(result)}")
     # Process the result content - assuming result is a string
     result_content: dict = result.structured_content
-    content_message = f"The transcription of the audio is {result_content['message']}"
+    content_message = f"The transcription of the audio is \'{result_content['message']}\'"
     
     result_messages.append({
         "role": "assistant",

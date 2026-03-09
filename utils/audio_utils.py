@@ -180,3 +180,8 @@ def save_audio_to_file(audio: np.ndarray, sr: int, filepath: str) -> None:
     sf.write(filepath, audio, sr)
     logger.info(f"Saved audio to {filepath}")
 
+# Function to encode the image
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        print(f"[IMAGE] GOT IMAGE PATH: {image_path}")
+        return base64.b64encode(image_file.read()).decode("utf-8")

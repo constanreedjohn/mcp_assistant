@@ -61,9 +61,9 @@ async def lifespan(app: FastAPI):
     app.state.asr_model = load_asr_model()
     print(f"LOADED ASR MODEL.")
     
-    print(f"LOADING VLM MODEL...")
-    app.state.vl_chat_processor, app.state.vl_gpt, app.state.tokenizer = load_visual_llm()
-    print(f"LOADED VLM MODEL...")
+    # print(f"LOADING VLM MODEL...")
+    # app.state.vl_chat_processor, app.state.vl_gpt, app.state.tokenizer = load_visual_llm()
+    # print(f"LOADED VLM MODEL...")
     
     yield
     

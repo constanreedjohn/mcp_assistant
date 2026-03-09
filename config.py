@@ -21,7 +21,7 @@ MCP_SERVER_URL: str = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:5001")
 LLAMACPP_LLM_URL: str = os.getenv("LLAMACPP_LLM_URL", "http://127.0.0.1:4001")
 
 # SLM URL (for intent classification)
-SLM_URL: str = os.getenv("SLM_URL", "http://127.0.0.1:8080")
+SLM_URL: str = os.getenv("SLM_URL", "http://127.0.0.1:6001")
 
 # Image Generation URL
 IMAGE_GEN_URL: str = os.getenv("IMAGE_GEN_URL", "http://127.0.0.1:3001")
@@ -31,7 +31,7 @@ IMAGE_GEN_URL: str = os.getenv("IMAGE_GEN_URL", "http://127.0.0.1:3001")
 # ============================================================================
 
 # Main LLM model (for chat + tool calls)
-LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "bartowski/Qwen2.5-3B-Instruct-GGUF:Q5_K_S")
+LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "bartowski/Qwen_Qwen3.5-2B-GGUF:Q4_1")
 
 # SLM model name (for intent classification)
 SLM_MODEL_NAME: str = os.getenv("SLM_MODEL_NAME", "bartowski/Qwen_Qwen3.5-0.8B-GGUF:Q5_K_M")

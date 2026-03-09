@@ -9,7 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
 import json
 import time
-from typing import List, Dict, Any, Union, Tuple
+from typing import List, Dict, Any, Union, Tuple, AsyncGenerator
 from PIL import Image
 
 import soundfile as sf
@@ -20,12 +20,13 @@ from fastmcp.client.client import CallToolResult
 
 from .tools import tool_definition_list
 from .logging_utils import logger
-from .audio_utils import read_wav_from_bytes
+from .audio_utils import read_wav_from_bytes, encode_image
 from .constants import (
     SYSTEM_PROMPT, 
     INTENT_CLASSIFIER_PROMPT,
     DEFAULT_LLM_MODEL,
     DEFAULT_SLM_MODEL,
+    DEFAULT_INPUT_IMAGE,
 )
 from config import MCP_SERVER_URL, LLAMACPP_LLM_URL, SLM_URL
 from .mcp_utils import (
@@ -48,14 +49,16 @@ class SLMClientWrapper:
             base_url=f"{SLM_URL}/v1",
             api_key='llama.cpp',  # required, but unused
         )
-        self.slm_model_name = DEFAULT_SLM_MODEL
+        self.slm_model_name = DEFAULT_LLM_MODEL # DEFAULT_SLM_MODEL
+    
+    async def clean_context(self, user_q):
         self.messages = [
             {
                 "role": "system",
-                "content": INTENT_CLASSIFIER_PROMPT
+                "content": INTENT_CLASSIFIER_PROMPT.format(query_message=user_q)
             }
         ]
-    
+        
     async def classify_intent(self, user_q: str) -> str:
         """Classify user query as 'tool' or 'chat'.
         
@@ -65,12 +68,22 @@ class SLMClientWrapper:
         Returns:
             'tool' if tool use is needed, 'chat' otherwise
         """
-        self.messages.append({"role": "user", "content": f"QUERY: {user_q}"})
+        self.messages = [
+            {
+                "role": "system",
+                "content": INTENT_CLASSIFIER_PROMPT.format(query_message=user_q)
+            }
+        ]
+        self.messages.append({"role": "user", "content": f"Please give me the response."})
+        
         response = await self.slm.chat.completions.create(
             model=self.slm_model_name,
             messages=self.messages
         )
         logger.info(f"SLM Intent Classification: {response.choices[0].message.content}")
+        
+        await self.clean_context(user_q)
+        
         return response.choices[0].message.content
 
 
@@ -129,6 +142,7 @@ class MCPClientWrapper:
             if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
                 # Process image
                 image_data = Image.open(upload_media)
+                image_data.save(DEFAULT_INPUT_IMAGE)
                 file_type = "image"
             elif file_path.lower().endswith(('.wav', '.mp3')):
                 try:
@@ -237,7 +251,24 @@ class MCPClientWrapper:
         if pre_context_classifier == "chat":
             logger.info(f">>>> NO CONTEXT TRIGGERED\n\n")
             
-            final_response = await self.llm.chat.completions.create(
+            if img:
+                base64_image = encode_image(DEFAULT_INPUT_IMAGE)
+                
+                self.claude_messages += [
+                    {
+                        "role": "user",
+                        "content": [
+                            { "type": "text", "text": text_query },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}",
+                                }
+                            },
+                        ],
+                    }
+                ]
+            final_response = await self.slm_client.slm.chat.completions.create(
                 model=self.model_name,
                 messages=self.claude_messages,
                 stream=True
@@ -260,24 +291,27 @@ class MCPClientWrapper:
             
             logger.info(f">>>> TOOL TRIGGERED\n\n")
                     
-            for tool_call in first_response.tool_calls:
-                tool_id = tool_call.id
-                tool_name = tool_call.function.name
-                logger.info(f"[TOOL] - {tool_id} - {tool_name}")
-                
-                # Parse tool arguments
-                try:
-                    tool_args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    tool_args = {"raw_args": tool_call.function.arguments}
-                
-                # Add tool use messages to history
-                self._add_tool_messages(tool_name, tool_id, tool_args)
-                
-                result = await self._call_tool(tool_name, tool_args, img, audio_bytes)
-                
-                # Add tool response to LLM messages
-                await self._add_tool_response(tool_name, tool_id, tool_args, result)
+            if first_response.tool_calls:
+                for tool_call in first_response.tool_calls:
+                    tool_id = tool_call.id
+                    tool_name = tool_call.function.name
+                    logger.info(f"[TOOL] - {tool_id} - {tool_name}")
+                    
+                    # Parse tool arguments
+                    try:
+                        tool_args = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError:
+                        tool_args = {"raw_args": tool_call.function.arguments}
+                    
+                    # Add tool use messages to history
+                    self._add_tool_messages(tool_name, tool_id, tool_args)
+                    
+                    result = await self._call_tool(tool_name, tool_args, img, audio_bytes)
+                    
+                    # Add tool response to LLM messages
+                    await self._add_tool_response(tool_name, tool_id, tool_args, result)
+            else:
+                self.claude_messages.append({"role": "assistant", "content": first_response.content})
             
             # Get final response after tool use
             final_response = await self.llm.chat.completions.create(
@@ -347,27 +381,7 @@ class MCPClientWrapper:
         
         logger.info(f"TOOL ARGS: {tool_args}")
         
-        if tool_name == "generate_image":
-            result = await call_image_generation_tool(
-                mcp_client=self.mcp_client,
-                tool_args=tool_args,
-                result_messages=self.result_messages,
-                tool_name=tool_name
-            )
-            if result and isinstance(result, CallToolResult) and hasattr(result, "data"):
-                image_bytes = base64.b64decode(result.data)
-                image = Image.open(io.BytesIO(image_bytes))
-                return image
-                
-        elif tool_name == "describe_image":
-            result = await call_image_describe_tool(
-                file_byte=img,
-                mcp_client=self.mcp_client,
-                tool_args=tool_args,
-                result_messages=self.result_messages,
-                tool_name=tool_name
-            )
-        elif tool_name == "transcribe_audio":
+        if tool_name == "transcribe_audio":
             result = await call_transcribe_audio_tool(
                 audio_data=audio_bytes,
                 mcp_client=self.mcp_client,
