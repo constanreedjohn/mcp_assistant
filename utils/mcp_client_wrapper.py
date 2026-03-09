@@ -1,24 +1,34 @@
-from dotenv import load_dotenv
-load_dotenv("../env.dev")
+"""
+MCP Client Wrapper for the MCP Assistant.
+Handles communication with the MCP server and LLM integration.
+"""
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
 import json
+import time
+from typing import List, Dict, Any, Union, Tuple, AsyncGenerator
 from PIL import Image
-import os
-import io
-import base64
-import numpy as np
+
 import soundfile as sf
 from fastmcp import Client
-from typing import List, Dict, Any, Union, Tuple
-import gradio as gr
 from openai import AsyncOpenAI
 from gradio.components.chatbot import ChatMessage
 from fastmcp.client.client import CallToolResult
 
 from .tools import tool_definition_list
 from .logging_utils import logger
-from .utils import _read_wav_from_bytes
+from .audio_utils import read_wav_from_bytes, encode_image
+from .constants import (
+    SYSTEM_PROMPT, 
+    INTENT_CLASSIFIER_PROMPT,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_SLM_MODEL,
+    DEFAULT_INPUT_IMAGE,
+)
+from config import MCP_SERVER_URL, LLAMACPP_LLM_URL, SLM_URL
 from .mcp_utils import (
     call_image_generation_tool,
     call_image_describe_tool,
@@ -27,49 +37,84 @@ from .mcp_utils import (
     call_get_multiply_tool,
     call_transcribe_audio_tool,
     add_tool_response,
-    add_image_tool_response
+    add_image_tool_response,
 )
 
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
 
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "")
-OLLAMA_LLM_URL = os.getenv("OLLAMA_LLM_URL", "")
+class SLMClientWrapper:
+    """Small Language Model client for intent classification."""
+    
+    def __init__(self):
+        self.slm = AsyncOpenAI(
+            base_url=f"{SLM_URL}/v1",
+            api_key='llama.cpp',  # required, but unused
+        )
+        self.slm_model_name = DEFAULT_LLM_MODEL # DEFAULT_SLM_MODEL
+    
+    async def clean_context(self, user_q):
+        self.messages = [
+            {
+                "role": "system",
+                "content": INTENT_CLASSIFIER_PROMPT.format(query_message=user_q)
+            }
+        ]
+        
+    async def classify_intent(self, user_q: str) -> str:
+        """Classify user query as 'tool' or 'chat'.
+        
+        Args:
+            user_q: User's input query
+            
+        Returns:
+            'tool' if tool use is needed, 'chat' otherwise
+        """
+        self.messages = [
+            {
+                "role": "system",
+                "content": INTENT_CLASSIFIER_PROMPT.format(query_message=user_q)
+            }
+        ]
+        self.messages.append({"role": "user", "content": f"Please give me the response."})
+        
+        response = await self.slm.chat.completions.create(
+            model=self.slm_model_name,
+            messages=self.messages
+        )
+        logger.info(f"SLM Intent Classification: {response.choices[0].message.content}")
+        
+        await self.clean_context(user_q)
+        
+        return response.choices[0].message.content
+
 
 class MCPClientWrapper:
+    """Main MCP client wrapper handling LLM and MCP server communication."""
+    
     def __init__(self):
-        self.model_name = "bartowski/Qwen2.5-3B-Instruct-GGUF:Q5_K_S"
+        self.model_name = DEFAULT_SLM_MODEL
         self.mcp_client = Client(f"{MCP_SERVER_URL}/mcp")
         self.llm = AsyncOpenAI(
-            base_url = f"{OLLAMA_LLM_URL}/v1",
-            api_key='llama.cpp', # required, but unused
+            base_url=f"{LLAMACPP_LLM_URL}/v1",
+            api_key='llama.cpp',  # required, but unused
         )
+        self.slm_client = SLMClientWrapper()
         self.tools = tool_definition_list
         self.claude_messages = []
         self.result_messages = []
-        self.claude_messages.append({
+        self.sys_prompt = {
             "role": "system", 
-            "content": 
-"""
-You're a chatbot assistant. Your task is to heed the user query and decide whether to use the functions such as: 'transcribe_audio', 'describe_image', 'get_forecast', 'get_alerts' with their respective parameters or not.
-Based on the the user query, decide if it is a conversation query or a functional tool request.
-If the user's query are general, just response in a conversational manner.
-If tools are needed, response with JSON format with the required parameters.
-Use these tool definitions to help you identifying the tasks:
-For tool 'transcribe_audio', you must reponse with a JSON object in the 'prompt' key with prompt representing the additional detail prompt for the audio transcription as the parameter.
-For tool 'describe_image', you must response with a JSON object in the 'prompt' key with prompt representing the additional detail prompt for the image description as the parameter.
-For tool 'get_alerts', you must response with a JSON object with a key and value pair representing the US state in the format of two-letter (e.g CA, NY) as parameter.
-For tool 'get_forecast', if the latitude and longtitude are given by the user, use that and response with a JSON object representing two key and value pairs for 'latitude' and 'longtitude' parameters. If both of those are not provided, figure it out yourself.
-For tool 'get_multiply', you must response with a JSON object with two key and value pairs representing the 'first_number' and the 'second_number' as parameters for the multiplication.
-"""
-        })
+            "content": SYSTEM_PROMPT
+        }
+        self.claude_messages.append(self.sys_prompt)
         
-    async def check_connection(self):
+    async def check_connection(self) -> None:
+        """Check MCP server connection."""
         async with self.mcp_client:
             await self.mcp_client.ping()
-            logger.info("Server is reachable")
+            logger.info("MCP Server is reachable")
     
-    async def _connect(self) -> str:
+    async def _connect(self) -> None:
+        """Connect to MCP server and list available tools."""
         async with self.mcp_client:
             self.mcp_client.session.__aenter__
             logger.info(f"Client connected: {self.mcp_client.is_connected()}")
@@ -78,39 +123,80 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
             tools = await self.mcp_client.list_tools()
             logger.info(f"Connected to MCP server. Available tools: {', '.join([t.name for t in tools])}")
 
-    async def process_message(self, text_query: str, history: List[Union[Dict[str, Any], ChatMessage]], upload_media=None):
-        # Initialize image_data and audio_data to None
+    def _get_file_type(self, upload_media) -> Tuple[str, Any]:
+        """Determine file type from uploaded media.
+        
+        Args:
+            upload_media: Uploaded file object
+            
+        Returns:
+            Tuple of (file_type, data) - file_type is 'image', 'audio', or None
+        """
         image_data = None
         audio_data = None
+        file_type = None
         
-        # Determine file type
         if upload_media:
             file_path = upload_media.name if hasattr(upload_media, 'name') else upload_media
         
             if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
                 # Process image
                 image_data = Image.open(upload_media)
+                image_data.save(DEFAULT_INPUT_IMAGE)
+                file_type = "image"
             elif file_path.lower().endswith(('.wav', '.mp3')):
                 try:
                     # Try to read and save as wav
                     wav, sr = sf.read(upload_media, dtype="float32", always_2d=False)
-                    # sf.write(input_audio_path, wav, sr)
                 except:
                     # If reading fails, try to read from bytes and convert
                     audio_bytes = upload_media.read()
-                    wav, sr = _read_wav_from_bytes(audio_bytes)
-                    # sf.write(input_audio_path, wav, sr)
+                    wav, sr = read_wav_from_bytes(audio_bytes)
                 
                 audio_data = (wav, sr) if (wav, sr) else (None, None)
-                # logger.info(f"GOT AUDIO DATA: {audio_data}")
+                file_type = "audio"
         
-        # Async generator to stream partial responses from _process_query
-        async for partial_messages, partial_image_data, partial_audio_data in self._process_query(text_query, history, image_data, audio_data):
-            image_data = partial_image_data
-            audio_data = partial_audio_data
-            yield history + partial_messages, gr.Textbox(value=""), image_data, audio_data
+        return file_type, image_data, audio_data
 
-    async def _get_model_response_tool(self, message: str, history: List[Union[Dict[str, Any], ChatMessage]]):
+    async def process_message(
+        self, 
+        text_query: str, 
+        history: List[Union[Dict[str, Any], ChatMessage]], 
+        upload_media=None
+    ):
+        """Process user message and stream response.
+        
+        Args:
+            text_query: User's text input
+            history: Chat history
+            upload_media: Optional uploaded file (image or audio)
+            
+        Yields:
+            Updated chat history, textbox value, image data, audio data
+        """
+        # Determine file type and process
+        file_type, image_data, audio_data = self._get_file_type(upload_media)
+        
+        # Async generator to stream partial responses
+        async for partial_messages, partial_image_data, partial_audio_data in self._process_query(
+            text_query, history, image_data, audio_data
+        ):
+            yield history + partial_messages, "", partial_image_data, partial_audio_data
+
+    async def _get_model_response_tool(
+        self, 
+        message: List[Dict], 
+        history: List[Union[Dict[str, Any], ChatMessage]]
+    ) -> Any:
+        """Get LLM response with tool definitions.
+        
+        Args:
+            message: Message history
+            history: Chat history
+            
+        Returns:
+            LLM response with tool calls if any
+        """
         response = await self.llm.chat.completions.create(
             model=self.model_name,
             messages=message,
@@ -119,188 +205,264 @@ For tool 'get_multiply', you must response with a JSON object with two key and v
         )
         return response
     
-    async def _process_query(self, text_query: str, history: List[Union[Dict[str, Any], ChatMessage]], img: Image.Image = None, audio_bytes: tuple[List, int] = None):
+    async def _process_query(
+        self, 
+        text_query: str, 
+        history: List[Union[Dict[str, Any], ChatMessage]], 
+        img: Image.Image = None, 
+        audio_bytes: Tuple[List, int] = None
+    ):
+        """Internal query processing with tool handling.
+        
+        Args:
+            text_query: User's text input
+            history: Chat history
+            img: Optional PIL Image
+            audio_bytes: Optional tuple of (audio array, sample rate)
+            
+        Yields:
+            Partial messages, image data, audio data
+        """
         self.result_messages = []
         
+        # Build conversation history for LLM
         for msg in history:
             if isinstance(msg, ChatMessage):
                 role, content = msg.role, msg.content
             else:
-                role, content = msg.get("role"), msg.get("content")
+                role, content = msg.get("role", "assistant"), msg.get("content")
+            
+            if isinstance(content, list):
+                content = content[0].get("text", "")
             
             if role in ["user", "assistant", "system"]:
                 self.claude_messages.append({"role": role, "content": content})
         
-        # self.claude_messages.append({"role": "user", "content": message})
-        
-        logger.info(f"[MESSAGE FIRST] - {self.claude_messages}")
-        response = await self._get_model_response_tool(self.claude_messages, history=history)
-        
-        # Get the first choice from response
-        choice = response.choices[0]
-        logger.info(f"[FIRST CHOICE] - {choice}")
-        first_response = choice.message
+        # Intent classification using SLM
+        start_pre = time.perf_counter()
+        pre_context_classifier = await self.slm_client.classify_intent(user_q=text_query)
+        end_pre = time.perf_counter() - start_pre
+        logger.info(f"[PRE_CLASSIFIER] TIME: {end_pre:.2f} {pre_context_classifier}\n")
         
         output_image_byte = None
         output_audio_data = None
         
-        # Handle regular text response
-        if not first_response.tool_calls:
-            self.result_messages.append({
-                "role": "assistant",
-                "content": first_response.content
-            })
-            logger.info(f"[RESULT MES] - First res: {first_response.content}")
-        else:
-            # Handle tool calls like in your Anthropic code
-            for tool_call in first_response.tool_calls:
-                tool_id = tool_call.id
-                tool_name = tool_call.function.name
-                logger.info(f"[TOOL] - {tool_id} - {tool_name}")
-                
-                # Try to parse tool arguments
-                try:
-                    tool_args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    tool_args = {"raw_args": tool_call.function.arguments}
-                
-                # Add initial tool use message
-                self.result_messages.append({
-                    "role": "assistant",
-                    "content": f"I'll use the {tool_name} tool to help answer your question.",
-                    "metadata": {
-                        "title": f"Using tool: {tool_name}",
-                        "log": f"Parameters: {json.dumps(tool_args, ensure_ascii=True)}",
-                        "status": "pending",
-                        "id": f"tool_call_{tool_name}"
-                    }
-                })
-                
-                # Add tool parameters message
-                self.result_messages.append({
-                    "role": "assistant",
-                    "content": "```json\n" + json.dumps(tool_args, indent=2, ensure_ascii=True) + "\n```",
-                    "metadata": {
-                        "parent_id": f"tool_call_{tool_name}",
-                        "id": f"params_{tool_name}",
-                        "title": "Tool Parameters"
-                    }
-                })
-                
-                logger.info(f"[RESULT MES] AFTER TOOL: {self.result_messages}")
-                
-                result = "Fail to get the server response"
-                
-                logger.info(f"TOOL ARGS: {tool_args}")
-                if tool_name == "generate_image":
-                    result: CallToolResult | list[dict] | list = await call_image_generation_tool(
-                        mcp_client=self.mcp_client,
-                        tool_args=tool_args,
-                        result_messages=self.result_messages,
-                        tool_name=tool_name
-                    )
-                    # Extract image bytes from result
-                    if result and isinstance(result, CallToolResult) and hasattr(result, "data"):
-                        image_bytes = base64.b64decode(result.data)
-                        # Convert bytes to PIL Image
-                        image = Image.open(io.BytesIO(image_bytes))
-                        output_image_byte = image
-                elif tool_name == "describe_image":
-                    result: CallToolResult | str = await call_image_describe_tool(
-                        file_byte=img,
-                        mcp_client=self.mcp_client,
-                        tool_args=tool_args,
-                        result_messages=self.result_messages,
-                        tool_name=tool_name
-                    )
-                elif tool_name == "transcribe_audio":
-                    result: CallToolResult | str = await call_transcribe_audio_tool(
-                        audio_data=audio_bytes,
-                        mcp_client=self.mcp_client,
-                        tool_args=tool_args,
-                        result_messages=self.result_messages,
-                        tool_name=tool_name
-                    )
-                elif tool_name == "get_forecast":
-                    result: CallToolResult | list[dict] | str = await call_get_forecast_tool(
-                        mcp_client=self.mcp_client,
-                        tool_args=tool_args,
-                        result_messages=self.result_messages,
-                        tool_name=tool_name
-                    )
-                elif tool_name == "get_alerts":
-                    result: CallToolResult | list[dict] | str = await call_get_alerts_tool(
-                        mcp_client=self.mcp_client,
-                        tool_args=tool_args,
-                        result_messages=self.result_messages,
-                        tool_name=tool_name
-                    )
-                elif tool_name == "get_multiply":
-                    result: CallToolResult | list[dict] = await call_get_multiply_tool(
-                        mcp_client=self.mcp_client,
-                        tool_args=tool_args,
-                        result_messages=self.result_messages,
-                        tool_name=tool_name
-                    )
-                logger.info(f"[RESULT MES] RESULT TOOL CALL MESSAGE: {self.result_messages}")
+        # Handle regular text response (chat)
+        if pre_context_classifier == "chat":
+            logger.info(f">>>> NO CONTEXT TRIGGERED\n\n")
             
-            # Get model to respond to tool output (second call)
-            # Add tool results to messages
-            self.claude_messages.append({
-                "role": "assistant",
-                "tool_calls": [
+            if img:
+                base64_image = encode_image(DEFAULT_INPUT_IMAGE)
+                
+                self.claude_messages += [
                     {
-                        "id": tool_id,
-                        "type": "function",
-                        "function": {
-                            "name": tool_name,
-                            "arguments": tool_call.function.arguments
-                        }
+                        "role": "user",
+                        "content": [
+                            { "type": "text", "text": text_query },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}",
+                                }
+                            },
+                        ],
                     }
                 ]
-            })
+            final_response = await self.slm_client.slm.chat.completions.create(
+                model=self.model_name,
+                messages=self.claude_messages,
+                stream=True
+            )
             
-            # Retrieve the tool repsonse and add it in the LLM chat completion
-            # Modify each tool response format if necessary.
-            if tool_name == "generate_image":
-                tool_response: dict = await add_image_tool_response(
-                    result=tool_args.get("prompt", ""),
-                    tool_id=tool_id,
-                    tool_name=tool_name
-                )
-            elif tool_name == "describe_image" or tool_name == "transcribe_audio":
-                tool_response: dict = await add_tool_response(
-                    tool_name=tool_name,
-                    result=result,
-                    tool_id=tool_id
-                )
-            elif tool_name == "get_multiply":
-                tool_response: dict = await add_tool_response(
-                    tool_name=tool_name,
-                    result=result,
-                    tool_id=tool_id
-                )
-            elif tool_name == "get_alerts" or tool_name == "get_forecast":
-                tool_response: dict = await add_tool_response(
-                    tool_name=tool_name,
-                    result=result,
-                    tool_id=tool_id
-                )
+            self.claude_messages = [self.sys_prompt]
+            
+            partial_content = ""
+            async for chunk in final_response:
+                if chunk.choices[0].delta.content is not None:
+                    partial_content += chunk.choices[0].delta.content
+                    yield [{"role": "assistant", "content": partial_content}], output_image_byte, output_audio_data
+            
+        elif pre_context_classifier == "tool":
+            # Tool use needed
+            response = await self._get_model_response_tool(self.claude_messages, history=history)
+            choice = response.choices[0]
+            logger.info(f"[FIRST CHOICE] - {choice}")
+            first_response = choice.message
+            
+            logger.info(f">>>> TOOL TRIGGERED\n\n")
+                    
+            if first_response.tool_calls:
+                for tool_call in first_response.tool_calls:
+                    tool_id = tool_call.id
+                    tool_name = tool_call.function.name
+                    logger.info(f"[TOOL] - {tool_id} - {tool_name}")
+                    
+                    # Parse tool arguments
+                    try:
+                        tool_args = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError:
+                        tool_args = {"raw_args": tool_call.function.arguments}
+                    
+                    # Add tool use messages to history
+                    self._add_tool_messages(tool_name, tool_id, tool_args)
+                    
+                    result = await self._call_tool(tool_name, tool_args, img, audio_bytes)
+                    
+                    # Add tool response to LLM messages
+                    await self._add_tool_response(tool_name, tool_id, tool_args, result)
+            else:
+                self.claude_messages.append({"role": "assistant", "content": first_response.content})
+            
+            # Get final response after tool use
+            final_response = await self.llm.chat.completions.create(
+                model=self.model_name,
+                messages=self.claude_messages,
+                stream=True
+            )
+            
+            self.claude_messages = [self.sys_prompt]
+            
+            partial_content = ""
+            async for chunk in final_response:
+                if chunk.choices[0].delta.content is not None:
+                    partial_content += chunk.choices[0].delta.content
+                    yield [{"role": "assistant", "content": partial_content}], output_image_byte, output_audio_data
+
+    def _add_tool_messages(self, tool_name: str, tool_id: str, tool_args: Dict) -> None:
+        """Add tool call messages to result history.
+        
+        Args:
+            tool_name: Name of the tool
+            tool_id: Tool call ID
+            tool_args: Tool arguments
+        """
+        self.result_messages.append({
+            "role": "assistant",
+            "content": f"I'll use the {tool_name} tool to help answer your question.",
+            "metadata": {
+                "title": f"Using tool: {tool_name}",
+                "log": f"Parameters: {json.dumps(tool_args, ensure_ascii=True)}",
+                "status": "pending",
+                "id": f"tool_call_{tool_name}"
+            }
+        })
+        
+        self.result_messages.append({
+            "role": "assistant",
+            "content": "```json\n" + json.dumps(tool_args, indent=2, ensure_ascii=True) + "\n```",
+            "metadata": {
+                "parent_id": f"tool_call_{tool_name}",
+                "id": f"params_{tool_name}",
+                "title": "Tool Parameters"
+            }
+        })
+        
+        logger.info(f"[RESULT MES] AFTER TOOL: {self.result_messages}")
+
+    async def _call_tool(
+        self, 
+        tool_name: str, 
+        tool_args: Dict, 
+        img: Image.Image, 
+        audio_bytes: Tuple
+    ) -> Any:
+        """Call the appropriate MCP tool.
+        
+        Args:
+            tool_name: Name of the tool to call
+            tool_args: Tool arguments
+            img: Image data
+            audio_bytes: Audio data
+            
+        Returns:
+            Tool result
+        """
+        result = "Fail to get the server response"
+        
+        logger.info(f"TOOL ARGS: {tool_args}")
+        
+        if tool_name == "transcribe_audio":
+            result = await call_transcribe_audio_tool(
+                audio_data=audio_bytes,
+                mcp_client=self.mcp_client,
+                tool_args=tool_args,
+                result_messages=self.result_messages,
+                tool_name=tool_name
+            )
+        elif tool_name == "get_forecast":
+            result = await call_get_forecast_tool(
+                mcp_client=self.mcp_client,
+                tool_args=tool_args,
+                result_messages=self.result_messages,
+                tool_name=tool_name
+            )
+        elif tool_name == "get_alerts":
+            result = await call_get_alerts_tool(
+                mcp_client=self.mcp_client,
+                tool_args=tool_args,
+                result_messages=self.result_messages,
+                tool_name=tool_name
+            )
+        elif tool_name == "get_multiply":
+            result = await call_get_multiply_tool(
+                mcp_client=self.mcp_client,
+                tool_args=tool_args,
+                result_messages=self.result_messages,
+                tool_name=tool_name
+            )
+            
+        logger.info(f"[RESULT MES] RESULT TOOL CALL MESSAGE: {self.result_messages}")
+        return result
+
+    async def _add_tool_response(
+        self, 
+        tool_name: str, 
+        tool_id: str, 
+        tool_args: Dict, 
+        result: Any
+    ) -> None:
+        """Add tool response to LLM message history.
+        
+        Args:
+            tool_name: Name of the tool
+            tool_id: Tool call ID
+            tool_args: Tool arguments
+            result: Tool result
+        """
+        # Add tool call to messages
+        self.claude_messages.append({
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": tool_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(tool_args)
+                    }
+                }
+            ]
+        })
+        
+        # Add tool response
+        if tool_name == "generate_image":
+            tool_response = await add_image_tool_response(
+                result=tool_args.get("prompt", ""),
+                tool_id=tool_id,
+                tool_name=tool_name
+            )
+        else:
+            tool_response = await add_tool_response(
+                tool_name=tool_name,
+                result=result,
+                tool_id=tool_id
+            )
                 
-            logger.info(f"[TOOL RESPONSE] {tool_response}")
-            self.claude_messages.append(tool_response)
-        
-        logger.info(f"[FINAL_MESSAGE] GOT CLAUDE MESSAGE: {self.claude_messages}")
-        # Get final response after tool use
-        final_response = await self.llm.chat.completions.create(
-            model=self.model_name,
-            messages=self.claude_messages,
-            stream=True
-        )
-        
-        partial_content = ""
-        async for chunk in final_response:
-            if chunk.choices[0].delta.content is not None:
-                partial_content += chunk.choices[0].delta.content
-                # Yield partial messages with updated content
-                yield [{"role": "assistant", "content": partial_content}], output_image_byte, output_audio_data
+        logger.info(f"[TOOL RESPONSE] {tool_response}")
+        self.claude_messages.append(tool_response)
+
+
+# Import base64 and io for image processing
+import base64
+import io
+

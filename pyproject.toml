@@ -12,7 +12,7 @@ dependencies = [
     "huggingface-hub>=0.36.2",
     "mcp>=1.10.1",
     "numpy>=2.4.2",
-    "openai>=1.77.0",
+    "openai>=2.24.0",
     "torch>=2.10.0",
     "torchaudio",
     "torchvision",

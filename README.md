@@ -16,13 +16,19 @@ This is a locally hosted Chatbot with MCP integrated.
 
 **1. LLM with llama-server**
 
-Make sure you have llama-server installed.
+Make sure you have llama.cpp installed.
 
-- Pull the model
+`brew install llama.cpp`
 
-`llama-server -hf bartowski/Qwen2.5-3B-Instruct-GGUF:Q5_K_S --port 4001 --jinja`
+- Deploy the main chatbot model
 
-**2. Install Dependencies**
+  `llama-server -hf bartowski/Qwen_Qwen3.5-2B-GGUF:Q4_1 --port 4001 --jinja --no-mmproj --reasoning-buget -1 -n 1024`
+
+- Deploy the Small Language Model
+
+  `llama-server -hf bartowski/Qwen_Qwen3.5-0.8B-GGUF:Q4_1 --reasoning-budget 0 --image-max-tokens 1024 --port 6001 --jinja`
+
+  **2. Install Dependencies**
 
 This project uses [uv](https://github.com/astral-sh/uv) for package management.
 
@@ -84,7 +90,9 @@ The server will start on `http://localhost:3001`
 
     - **get_multiply**: Do multiplicate between 2 numbers.
 
-    - **generate_image**: Call to the hosted FastAPI Image Generation model.
+    - **image_description**: Utilize the multimodal of the LLM for image description function.
+
+    - **audio_transcription**: Transcribe an audio file for the uploaded audio.
 
     Open a second terminal
 
@@ -93,7 +101,7 @@ The server will start on `http://localhost:3001`
     uv run python servers/main_mcp.py
     ```
 
-    The server will start on `http://localhost:8000`
+    The server will start on `http://localhost:5001`
 
 **5. Startup the main app:**
 
