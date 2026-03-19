@@ -22,11 +22,11 @@ Make sure you have llama.cpp installed.
 
 - Deploy the main chatbot model
 
-  `llama-server -hf bartowski/Qwen_Qwen3.5-2B-GGUF:Q4_1 --port 4001 --jinja --no-mmproj --reasoning-buget -1 -n 1024`
+  `llama-server -hf bartowski/Qwen_Qwen3.5-2B-GGUF:Q4_1 --port 4001 --jinja --no-mmproj --reasoning-budget -1 -n 1024`
 
 - Deploy the Small Language Model
 
-  `llama-server -hf bartowski/Qwen_Qwen3.5-0.8B-GGUF:Q4_1 --reasoning-budget 0 --image-max-tokens 1024 --port 6001 --jinja`
+  `llama-server -hf bartowski/Qwen_Qwen3.5-0.8B-GGUF:Q4_1 --reasoning-budget -1 --image-max-tokens 1024 --port 6001 --jinja`
 
   **2. Install Dependencies**
 
@@ -46,6 +46,7 @@ uv sync
 ```
 
 **Optional: Activate the virtual environment:**
+docker run -p 6333:6333 qdrant/qdrant
 
 ```
 source .venv/bin/activate
@@ -115,3 +116,11 @@ The server will start on `http://localhost:3001`
     ```
 
     The server will start on `http://localhost:7860`
+
+**6. Start Vector DB:**
+
+```
+docker run -p 6333:6333 -p 6334:6334 \
+    -v "$(pwd)/qdrant_storage:/qdrant/storage:z" \
+    qdrant/qdrant
+```
