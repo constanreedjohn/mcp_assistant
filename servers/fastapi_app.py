@@ -63,9 +63,9 @@ def load_asr_model():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler - loads and unloads ML models."""
-    # print(f"LOADING ASR MODEL...")
-    # app.state.asr_model = load_asr_model()
-    # print(f"LOADED ASR MODEL.")
+    print(f"LOADING ASR MODEL...")
+    app.state.asr_model = load_asr_model()
+    print(f"LOADED ASR MODEL.")
     
     # Initialize RAG pipeline
     print(f"INITIALIZING RAG PIPELINE...")
@@ -104,77 +104,6 @@ app = FastAPI(title="API SERVER", lifespan=lifespan)
 def get_server_health():
     """Health check endpoint."""
     return {"status": "ok"}
-
-
-# @app.get("/image/describe")
-# async def describe_image(request: Request, prompt: str, file_byte: str) -> dict:
-#     """Describe an uploaded image using DeepSeek-VL visual language model.
-    
-#     Args:
-#         request: FastAPI request object
-#         prompt: Text prompt for image description
-#         file_byte: Base64 encoded image bytes
-        
-#     Returns:
-#         Dictionary with status and description message
-#     """
-#     try:
-#         vl_chat_processor = request.app.state.vl_chat_processor
-#         vl_gpt = request.app.state.vl_gpt
-#         tokenizer = request.app.state.tokenizer
-        
-#         # Prepare conversation with image placeholder
-#         conversation = [
-#             {
-#                 "role": "User",
-#                 "content": f"<image_placeholder>Describe this image with the detail: {prompt}.",
-#                 "images": [file_byte]
-#             },
-#             {
-#                 "role": "Assistant",
-#                 "content": ""
-#             }
-#         ]
-        
-#         # Load images and prepare inputs
-#         pil_images = load_pil_images(conversation)
-#         prepare_inputs = vl_chat_processor(
-#             conversations=conversation,
-#             images=pil_images,
-#             force_batchify=True
-#         ).to(vl_gpt.device)
-#         print(f"[DESCRIBE_IMAGE] GOT IMAGE")
-        
-#         # Run image encoder to get embeddings
-#         inputs_embeds = vl_gpt.prepare_inputs_embeds(**prepare_inputs)
-        
-#         # Generate response from model
-#         outputs = vl_gpt.language_model.generate(
-#             inputs_embeds=inputs_embeds,
-#             attention_mask=prepare_inputs.attention_mask,
-#             pad_token_id=tokenizer.eos_token_id,
-#             bos_token_id=tokenizer.bos_token_id,
-#             eos_token_id=tokenizer.eos_token_id,
-#             max_new_tokens=512,
-#             do_sample=False,
-#             use_cache=True
-#         )
-        
-#         answer = tokenizer.decode(outputs[0].cpu().tolist(), skip_special_tokens=True)
-#         print(f"[DESCRIBE_IMAGE] Done - Answer: {answer}")
-        
-#         return {
-#             "status": "success",
-#             "message": answer,
-#         }
-    
-#     except Exception as e:
-#         print(traceback.format_exc())
-#         print(f"[SERVER][DESCRIBE_IMAGE] Error: {str(e)}")
-#         return {
-#             "status": "error",
-#             "message": f"Error describing image: {str(e)}"
-#         }
 
 
 # =============================================================================

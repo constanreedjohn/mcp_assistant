@@ -20,8 +20,6 @@ async def gradio_interface():
     """Create and configure the Gradio interface."""
     # Test connection to MCP server
     client = MCPClientWrapper()
-    # await client.check_connection()
-    # await client._connect()
     
     def toggle_media_active(file):
         if file is not None:
