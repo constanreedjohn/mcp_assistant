@@ -2,34 +2,32 @@ from typing import List, Dict, Any, Union
 
 def get_tool_definition():
     return [
-    # {
-    #     "type": "function",
-    #     "function": {
-    #         "name": "generate_image",
-    #         "description": "Generate an image using SanaSprint model with the output of three parameters: 'prompt', 'width', 'height'",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "prompt": {
-    #                     "type": "string",
-    #                     "description": "Text prompt describing the image to generate"
-    #                 },
-    #                 "width": {
-    #                     "type": "integer",
-    #                     "description": "Image width (default: 512)",
-    #                     "default": 512
-    #                 },
-    #                 "height": {
-    #                     "type": "integer",
-    #                     "description": "Image height (default: 512)",
-    #                     "default": 512
-    #                 }
-    #             },
-    #             "required": ["prompt"]
-    #         },
-    #         "strict": True,
-    #     },
-    # },
+    {
+        "type": "function",
+        "function": {
+            "name": "retrieve_documents",
+            "description": "Retrieve relevant context from the documents to provide information for the user.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "A text prompt of the user request."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "The number of the retrieved chunks"
+                    },
+                    "validate": {
+                        "type": "boolean",
+                        "description": "Whether to validate the context of the retrieved chunks."
+                    },
+                },
+                "required": ["query"]
+            },
+            "strict": True,
+        },
+    },
     {
         "type": "function",
         "function": {

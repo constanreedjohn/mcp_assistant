@@ -6,15 +6,17 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import asyncio
+import uuid
 import json
 import time
+import traceback
 from typing import List, Dict, Any, Union, Tuple, AsyncGenerator
 from PIL import Image
 
 import soundfile as sf
 from fastmcp import Client
 from openai import AsyncOpenAI
+from qdrant_client import QdrantClient
 from gradio.components.chatbot import ChatMessage
 from fastmcp.client.client import CallToolResult
 
@@ -28,16 +30,39 @@ from .constants import (
     DEFAULT_SLM_MODEL,
     DEFAULT_INPUT_IMAGE,
 )
-from config import MCP_SERVER_URL, LLAMACPP_LLM_URL, SLM_URL
+from config import (
+    MCP_SERVER_URL, 
+    LLAMACPP_LLM_URL, 
+    SLM_URL, 
+    QDRANT_HOST,
+    QDRANT_PORT,
+    QDRANT_COLLECTION,
+    EMBEDDING_MODEL,
+    CHUNK_TOKENS,
+    OVERLAP_TOKENS,
+    DEFAULT_RETRIEVAL_LIMIT,
+    DOCUMENT_STORAGE_DIR
+)
 from .mcp_utils import (
     call_image_generation_tool,
-    call_image_describe_tool,
     call_get_forecast_tool,
     call_get_alerts_tool,
     call_get_multiply_tool,
     call_transcribe_audio_tool,
+    call_get_retrieve_document,
     add_tool_response,
     add_image_tool_response,
+    add_document_tool_response,
+)
+from .rag_utils import (
+    RAGPipeline,
+    DocumentIngestion,
+    DocumentChunker,
+    ChunkIndexer,
+    ChunkIngestion,
+    RetrievalEngine,
+    LLMContextValidator,
+    ContextValidator
 )
 
 
@@ -49,7 +74,7 @@ class SLMClientWrapper:
             base_url=f"{SLM_URL}/v1",
             api_key='llama.cpp',  # required, but unused
         )
-        self.slm_model_name = DEFAULT_LLM_MODEL # DEFAULT_SLM_MODEL
+        self.slm_model_name = DEFAULT_SLM_MODEL # DEFAULT_SLM_MODEL
     
     async def clean_context(self, user_q):
         self.messages = [
@@ -91,13 +116,27 @@ class MCPClientWrapper:
     """Main MCP client wrapper handling LLM and MCP server communication."""
     
     def __init__(self):
-        self.model_name = DEFAULT_SLM_MODEL
+        # LLM Init
+        self.model_name = DEFAULT_LLM_MODEL
         self.mcp_client = Client(f"{MCP_SERVER_URL}/mcp")
         self.llm = AsyncOpenAI(
             base_url=f"{LLAMACPP_LLM_URL}/v1",
             api_key='llama.cpp',  # required, but unused
         )
         self.slm_client = SLMClientWrapper()
+        
+        # RAG Init
+        self.qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        self.rag_pipeline = RAGPipeline(
+            qdrant_client=self.qdrant_client,
+            collection_name=QDRANT_COLLECTION,
+            embedding_model=EMBEDDING_MODEL,
+            chunk_tokens=CHUNK_TOKENS,
+            overlap_tokens=OVERLAP_TOKENS,
+            storage_dir=DOCUMENT_STORAGE_DIR
+        )
+        
+        # Main LLM Chatbot Inint
         self.tools = tool_definition_list
         self.claude_messages = []
         self.result_messages = []
@@ -130,7 +169,7 @@ class MCPClientWrapper:
             upload_media: Uploaded file object
             
         Returns:
-            Tuple of (file_type, data) - file_type is 'image', 'audio', or None
+            Tuple of (file_type, data) - file_type is 'image', 'audio', 'document', or None
         """
         image_data = None
         audio_data = None
@@ -150,7 +189,9 @@ class MCPClientWrapper:
                     wav, sr = sf.read(upload_media, dtype="float32", always_2d=False)
                 except:
                     # If reading fails, try to read from bytes and convert
-                    audio_bytes = upload_media.read()
+                    with open(file_path, 'rb') as fin:
+                        audio_bytes = fin.read()
+                    
                     wav, sr = read_wav_from_bytes(audio_bytes)
                 
                 audio_data = (wav, sr) if (wav, sr) else (None, None)
@@ -158,11 +199,40 @@ class MCPClientWrapper:
         
         return file_type, image_data, audio_data
 
+    def process_document_file(
+        self,
+        upload_document_file
+    ):
+        logger.info(f"[INGEST DOCUMENT] INGESTING DOCUMENT...")
+        file_path = upload_document_file.name if hasattr(upload_document_file, 'name') else upload_document_file
+        
+        if file_path.lower().endswith(('.pdf', '.docx', '.doc', '.txt')):
+            # logger.info(f"GOT MEDIA: {upload_document_file} - {type(upload_media)}")
+            try:
+                filename = file_path.split("/")[-1]
+                with open(upload_document_file, 'rb') as fin:
+                    file_bytes = fin.read()
+                logger.info(f"[INGEST DOCUMENT] DONE READING FILE BYTES.")
+                # Generate document ID
+                document_id = str(uuid.uuid4())
+                logger.info(f"[INGEST DOCUMENT] START PROCESSING...")
+                self.rag_pipeline.ingest_document(
+                    content=file_bytes,
+                    document_id=document_id,
+                    filename=filename,
+                )
+                logger.info(f"[INGEST DOCUMENT] DONE DOCUMENT")
+                
+            except Exception as e:
+                logger.info(f"[DOCUMENT][INGESTION] - Failed to ingest document - {e}")
+                logger.info(traceback.format_exc())
+                
     async def process_message(
         self, 
         text_query: str, 
         history: List[Union[Dict[str, Any], ChatMessage]], 
-        upload_media=None
+        upload_media=None,
+        rag_enabled: bool = True,
     ):
         """Process user message and stream response.
         
@@ -178,10 +248,10 @@ class MCPClientWrapper:
         file_type, image_data, audio_data = self._get_file_type(upload_media)
         
         # Async generator to stream partial responses
-        async for partial_messages, partial_image_data, partial_audio_data in self._process_query(
-            text_query, history, image_data, audio_data
+        async for partial_messages in self._process_query(
+            text_query, history, image_data, audio_data, rag_enabled
         ):
-            yield history + partial_messages, "", partial_image_data, partial_audio_data
+            yield history + partial_messages, ""
 
     async def _get_model_response_tool(
         self, 
@@ -210,7 +280,8 @@ class MCPClientWrapper:
         text_query: str, 
         history: List[Union[Dict[str, Any], ChatMessage]], 
         img: Image.Image = None, 
-        audio_bytes: Tuple[List, int] = None
+        audio_bytes: Tuple[List, int] = None,
+        rag_enabled: bool = True,
     ):
         """Internal query processing with tool handling.
         
@@ -238,95 +309,156 @@ class MCPClientWrapper:
             if role in ["user", "assistant", "system"]:
                 self.claude_messages.append({"role": role, "content": content})
         
-        # Intent classification using SLM
-        start_pre = time.perf_counter()
-        pre_context_classifier = await self.slm_client.classify_intent(user_q=text_query)
-        end_pre = time.perf_counter() - start_pre
-        logger.info(f"[PRE_CLASSIFIER] TIME: {end_pre:.2f} {pre_context_classifier}\n")
-        
-        output_image_byte = None
-        output_audio_data = None
-        
-        # Handle regular text response (chat)
-        if pre_context_classifier == "chat":
-            logger.info(f">>>> NO CONTEXT TRIGGERED\n\n")
-            
-            if img:
-                base64_image = encode_image(DEFAULT_INPUT_IMAGE)
+        if rag_enabled:
+            logger.info(f"[RAG] TRIGGERED RAG MODE.")
+            try:
+                if not self.rag_pipeline:
+                    logger.info(f"[RAG] Error - RAG pipeline not initialized")
                 
-                self.claude_messages += [
-                    {
-                        "role": "user",
-                        "content": [
-                            { "type": "text", "text": text_query },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}",
-                                }
-                            },
-                        ],
-                    }
-                ]
-            final_response = await self.slm_client.slm.chat.completions.create(
-                model=self.model_name,
-                messages=self.claude_messages,
-                stream=True
-            )
+                # Retrieve documents
+                result = await self.rag_pipeline.retrieve(
+                    query=text_query,
+                    limit=10,
+                    document_id=None,
+                    validate=False
+                )
+                
+                rag_response = await add_document_tool_response(
+                    result=result,
+                    tool_id=None,
+                    tool_name=None
+                )
+                
+                rag_prompt = await self.rag_pipeline.retrieval_engine.get_response_prompt(
+                    retrieved_document=rag_response["content"]["results"]
+                )
+                # self.claude_messages.pop(len(self.claude_messages)-1)
+                self.claude_messages.append(rag_prompt)
+                logger.info(f"[RAG] CLAUDE MESSAGE WITH RAG: {self.claude_messages}")
+                
+                # Get final response with RAG
+                final_response = await self.llm.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.claude_messages,
+                    stream=True
+                )
+                
+                self.claude_messages = [self.sys_prompt]
+                
+                partial_content = ""
+                async for chunk in final_response:
+                    if chunk.choices[0].delta.content is not None:
+                        partial_content += chunk.choices[0].delta.content
+                        yield [{"role": "assistant", "content": partial_content}]
             
-            self.claude_messages = [self.sys_prompt]
+            except Exception as e:
+                logger.info(traceback.format_exc())
+                logger.info(f"[RAG] Error: {str(e)}")
             
-            partial_content = ""
-            async for chunk in final_response:
-                if chunk.choices[0].delta.content is not None:
-                    partial_content += chunk.choices[0].delta.content
-                    yield [{"role": "assistant", "content": partial_content}], output_image_byte, output_audio_data
+        else:
+            # Intent classification using SLM
+            start_pre = time.perf_counter()
+            pre_context_classifier = await self.slm_client.classify_intent(user_q=text_query)
+            end_pre = time.perf_counter() - start_pre
+            logger.info(f"[PRE_CLASSIFIER] TIME: {end_pre:.2f} {pre_context_classifier}\n")
             
-        elif pre_context_classifier == "tool":
-            # Tool use needed
-            response = await self._get_model_response_tool(self.claude_messages, history=history)
-            choice = response.choices[0]
-            logger.info(f"[FIRST CHOICE] - {choice}")
-            first_response = choice.message
+            output_image_byte = None
+            output_audio_data = None
             
-            logger.info(f">>>> TOOL TRIGGERED\n\n")
+            # Handle regular text response (chat)
+            if pre_context_classifier == "chat":
+                logger.info(f">>>> NO CONTEXT TRIGGERED\n\n")
+                
+                if img:
+                    base64_image = encode_image(DEFAULT_INPUT_IMAGE)
                     
-            if first_response.tool_calls:
-                for tool_call in first_response.tool_calls:
-                    tool_id = tool_call.id
-                    tool_name = tool_call.function.name
-                    logger.info(f"[TOOL] - {tool_id} - {tool_name}")
-                    
-                    # Parse tool arguments
-                    try:
-                        tool_args = json.loads(tool_call.function.arguments)
-                    except json.JSONDecodeError:
-                        tool_args = {"raw_args": tool_call.function.arguments}
-                    
-                    # Add tool use messages to history
-                    self._add_tool_messages(tool_name, tool_id, tool_args)
-                    
-                    result = await self._call_tool(tool_name, tool_args, img, audio_bytes)
-                    
-                    # Add tool response to LLM messages
-                    await self._add_tool_response(tool_name, tool_id, tool_args, result)
-            else:
-                self.claude_messages.append({"role": "assistant", "content": first_response.content})
+                    self.claude_messages += [
+                        {
+                            "role": "user",
+                            "content": [
+                                { "type": "text", "text": text_query },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_image}",
+                                    }
+                                },
+                            ],
+                        }
+                    ]
+                final_response = await self.slm_client.slm.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.claude_messages,
+                    stream=True
+                )
+                
+                self.claude_messages = [self.sys_prompt]
+                
+                partial_content = ""
+                async for chunk in final_response:
+                    if chunk.choices[0].delta.content is not None:
+                        partial_content += chunk.choices[0].delta.content
+                        yield [{"role": "assistant", "content": partial_content}]
+                
+            elif pre_context_classifier == "tool":
+                # Tool use needed
+                response = await self._get_model_response_tool(self.claude_messages, history=history)
+                choice = response.choices[0]
+                logger.info(f"[FIRST CHOICE] - {choice}")
+                first_response = choice.message
+                
+                logger.info(f">>>> TOOL TRIGGERED\n\n")
+                        
+                if first_response.tool_calls:
+                    for tool_call in first_response.tool_calls:
+                        tool_id = tool_call.id
+                        tool_name = tool_call.function.name
+                        logger.info(f"[TOOL] - {tool_id} - {tool_name}")
+                        
+                        # Parse tool arguments
+                        try:
+                            tool_args = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError:
+                            tool_args = {"raw_args": tool_call.function.arguments}
+                        
+                        # Add tool use messages to history
+                        self._add_tool_messages(tool_name, tool_id, tool_args)
+                        
+                        result = await self._call_tool(tool_name, tool_args, audio_bytes)
+                        
+                        # Add tool response to LLM messages
+                        await self._add_tool_response(tool_name, tool_id, tool_args, result)
+                        # Get final response after tool use
+                        final_response = await self.llm.chat.completions.create(
+                            model=self.model_name,
+                            messages=self.claude_messages,
+                            stream=True
+                        )
+                        
+                        self.claude_messages = [self.sys_prompt]
+                        
+                        partial_content = ""
+                        async for chunk in final_response:
+                            if chunk.choices[0].delta.content is not None:
+                                partial_content += chunk.choices[0].delta.content
+                                yield [{"role": "assistant", "content": partial_content}]
+                else:
+                    self.claude_messages.append({"role": "assistant", "content": first_response.content})
             
-            # Get final response after tool use
-            final_response = await self.llm.chat.completions.create(
-                model=self.model_name,
-                messages=self.claude_messages,
-                stream=True
-            )
-            
-            self.claude_messages = [self.sys_prompt]
-            
-            partial_content = ""
-            async for chunk in final_response:
-                if chunk.choices[0].delta.content is not None:
-                    partial_content += chunk.choices[0].delta.content
-                    yield [{"role": "assistant", "content": partial_content}], output_image_byte, output_audio_data
+                    # Get final response after tool use
+                    final_response = await self.llm.chat.completions.create(
+                        model=self.model_name,
+                        messages=self.claude_messages,
+                        stream=True
+                    )
+                    
+                    self.claude_messages = [self.sys_prompt]
+                    
+                    partial_content = ""
+                    async for chunk in final_response:
+                        if chunk.choices[0].delta.content is not None:
+                            partial_content += chunk.choices[0].delta.content
+                            yield [{"role": "assistant", "content": partial_content}]
 
     def _add_tool_messages(self, tool_name: str, tool_id: str, tool_args: Dict) -> None:
         """Add tool call messages to result history.
@@ -362,8 +494,7 @@ class MCPClientWrapper:
     async def _call_tool(
         self, 
         tool_name: str, 
-        tool_args: Dict, 
-        img: Image.Image, 
+        tool_args: Dict,
         audio_bytes: Tuple
     ) -> Any:
         """Call the appropriate MCP tool.
@@ -410,6 +541,13 @@ class MCPClientWrapper:
                 result_messages=self.result_messages,
                 tool_name=tool_name
             )
+        elif tool_name == "retrieve_documents":
+            result = await call_get_retrieve_document(
+                mcp_client=self.mcp_client,
+                tool_args=tool_args,
+                result_messages=self.result_messages,
+                tool_name=tool_name
+            )
             
         logger.info(f"[RESULT MES] RESULT TOOL CALL MESSAGE: {self.result_messages}")
         return result
@@ -448,6 +586,12 @@ class MCPClientWrapper:
         if tool_name == "generate_image":
             tool_response = await add_image_tool_response(
                 result=tool_args.get("prompt", ""),
+                tool_id=tool_id,
+                tool_name=tool_name
+            )
+        elif tool_name == "retrieve_documents":
+            tool_response = await add_document_tool_response(
+                result=result,
                 tool_id=tool_id,
                 tool_name=tool_name
             )

@@ -439,6 +439,71 @@ async def call_transcribe_audio_tool(
         
     return content_message
 
+async def call_get_retrieve_document(
+    mcp_client: Client,
+    tool_args: Dict,
+    result_messages: List[Dict],
+    tool_name: str
+) -> List[Dict] | CallToolResult | str | Dict:
+    try:
+        async with mcp_client:
+            result: CallToolResult = await mcp_client.call_tool(
+                name="retrieve_documents",
+                arguments=dict(
+                    query=tool_args.get("query", ""),
+                    limit=tool_args.get("limit", 10),
+                    validate=tool_args.get("validate", False)
+                )
+            )
+        
+        # Update the status of the tool call
+        if result_messages and "metadata" in result_messages[-2]:
+            result_messages[-2]["metadata"]["status"] = "done"
+        
+        # Add a header for the tool results
+            result_messages.append({
+                "role": "assistant",
+                "content": "Here are the results from the tool:",
+                "metadata": {
+                    "title": f"Tool Result for {tool_name}",
+                    "status": "done",
+                    "id": f"result_{tool_name}"
+                }
+            })
+    except Exception as e:
+        print(traceback.format_exc(), e)
+        result = "Fail to get the server response."
+        result_messages.append({
+            "role": "assistant",
+            "content": "```\n" + result + "\n```",
+            "metadata": {
+                "parent_id": f"result_{tool_name}",
+                "id": f"raw_result_{tool_name}",
+                "status": "done",
+                "title": "Raw Output"
+            }
+        })
+        raise Exception(e)
+        
+    print(f"[TOOL CALL] Document_retrieval: Result - {result} - {type(result)}")
+    # Process the result content - assuming result is a string
+    result_content: dict = result.structured_content
+    content_message = f"The retrieved chunks of document are: \'{result_content['message']['results']}\'"
+    print(f"[TOOL_CALL] GOT DOCUMENTS: {content_message}")
+    
+    result_messages.append({
+        "role": "assistant",
+        "content": "```\n" + content_message + "\n```",
+        "metadata": {
+            "parent_id": f"result_{tool_name}",
+            "id": f"raw_result_{tool_name}",
+            "title": "Raw Output",
+            "status": "done",
+        }
+    })
+        
+    return content_message
+
 async def add_tool_response(
     result: List[Dict] | Dict | str | CallToolResult,
     tool_id: str,
@@ -493,3 +558,34 @@ async def add_image_tool_response(
     
     print(f"[TOOL RESPONSE] {tool_response}")
     return tool_response
+
+async def add_document_tool_response(
+    result: list,
+    tool_id: str | None,
+    tool_name: str | None
+) -> Optional[Dict] | Optional[str]:
+    tool_response = {
+        "role": "tool",
+        "tool_name": tool_name,
+        "tool_call_id": tool_id,
+        "content": ""
+    }
+    if isinstance(result, CallToolResult):
+        try:
+            tool_response["content"] = result.structured_content["result"]
+        except:
+            tool_response["content"] = result.structured_content["message"]
+        return tool_response
+    if isinstance(result, list):
+        tool_response["content"] = "\n".join([i for i in result])
+        return tool_response
+    if isinstance(result, str):
+        tool_response["content"] = result
+        return tool_response
+    else:
+        try:
+            result_json = json.loads(result)    
+            tool_response["content"] = result_json["message"]
+        except:
+            tool_response["content"] = result    
+        return tool_response

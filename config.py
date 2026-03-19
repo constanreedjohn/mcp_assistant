@@ -24,7 +24,7 @@ LLAMACPP_LLM_URL: str = os.getenv("LLAMACPP_LLM_URL", "http://127.0.0.1:4001")
 SLM_URL: str = os.getenv("SLM_URL", "http://127.0.0.1:6001")
 
 # Image Generation URL
-IMAGE_GEN_URL: str = os.getenv("IMAGE_GEN_URL", "http://127.0.0.1:3001")
+MAIN_API_URL: str = os.getenv("MAIN_API_URL", "http://127.0.0.1:3001")
 
 # ============================================================================
 # Model Configuration
@@ -84,4 +84,28 @@ MCP_PORT: int = 5001
 
 # Logging
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+# ============================================================================
+# RAG Configuration
+# ============================================================================
+
+# Qdrant settings
+QDRANT_HOST: str = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT: int = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "document_chunks")
+
+# Embedding model settings
+EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "mps")
+
+# Chunking settings
+CHUNK_TOKENS: int = int(os.getenv("CHUNK_TOKENS", "128"))
+OVERLAP_TOKENS: int = int(os.getenv("OVERLAP_TOKENS", "50"))
+
+# Retrieval settings
+DEFAULT_RETRIEVAL_LIMIT: int = int(os.getenv("DEFAULT_RETRIEVAL_LIMIT", "5"))
+MIN_SIMILARITY_SCORE: float = float(os.getenv("MIN_SIMILARITY_SCORE", "0.3"))
+
+# Document storage
+DOCUMENT_STORAGE_DIR: str = str(Path(__file__).parent.parent / "documents")
 
