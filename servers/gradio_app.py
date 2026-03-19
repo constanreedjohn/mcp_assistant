@@ -16,11 +16,32 @@ from gradio.components.chatbot import ChatMessage
 from utils.mcp_client_wrapper import MCPClientWrapper
 from config import GRADIO_HOST, GRADIO_PORT
 
-
-def gradio_interface():
+async def gradio_interface():
     """Create and configure the Gradio interface."""
+    # Test connection to MCP server
+    client = MCPClientWrapper()
+    # await client.check_connection()
+    # await client._connect()
     
-    async def submit_message(message, chat_history, upload_media):
+    def toggle_media_active(file):
+        if file is not None:
+            return gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False, value=None), True, False, gr.update(interactive=False)
+        return gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), False, False, gr.update(interactive=True)
+
+    def toggle_doc_active(file):
+        if file is not None:
+            return gr.update(visible=False, interactive=False, value=None), gr.update(visible=True, interactive=True), False, True, gr.update(interactive=True)
+        return gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), False, False, gr.update(interactive=True)
+
+    def toggle_rag_ui(rag_enabled):
+        # Toggle document upload visibility/interactivity based on RAG checkbox
+        doc_visible = rag_enabled
+        return gr.update(visible=doc_visible, interactive=doc_visible), gr.update(visible=doc_visible), doc_visible
+
+    def upload_document(document_file):
+        client.process_document_file(document_file)
+    
+    async def submit_message(message, chat_history, upload_media, rag_enabled):
         """Handle message submission and stream responses."""
         # Initialize chat history if None
         if chat_history is None:
@@ -30,14 +51,11 @@ def gradio_interface():
         chat_history += [{"role": "user", "content": message}]
         
         # Yield the updated chat history and clear the input box immediately
-        yield chat_history, "", None, None
-        
-        # Create a new client for each request to avoid state issues
-        client = MCPClientWrapper()
+        yield chat_history, ""
         
         # Now stream the assistant's response and update the chat
-        async for updated_history, textbox, image_data, audio_data in client.process_message(message, chat_history, upload_media):
-            yield updated_history, textbox, image_data, audio_data
+        async for updated_history, textbox in client.process_message(message, chat_history, upload_media, rag_enabled):
+            yield updated_history, textbox
     
     with gr.Blocks(title="MCP Weather Client") as demo:
         gr.Markdown("# MCP Weather Assistant")
@@ -46,6 +64,9 @@ def gradio_interface():
         # State variables to store uploaded images and audio
         image_state = gr.State(None)
         audio_state = gr.State(None)
+        media_active = gr.State(value=False)
+        doc_active = gr.State(value=False)
+        rag_enabled_state = gr.State(value=True)  # RAG enabled by default
         
         with gr.Row(equal_height=True):
             # Left side - main chat interface
@@ -69,59 +90,74 @@ def gradio_interface():
             
             # Right side - media upload and display
             with gr.Column(scale=1):
-                gr.Markdown("### 📁 Upload Media")
+                # gr.Markdown("### 📁 Upload Media")
                 
                 # Image upload section with icon
                 with gr.Group():
+                    process_btn = gr.Button("Ingest", visible=True)
                     upload_file = gr.File(
                         label="Upload Image/Audio file",
                         file_count="single",
-                        file_types=["audio", "image"]    
+                        file_types=["audio", "image"],
+                        visible=True
                     )
-                    process_btn = gr.Button("Process")
-                
-                gr.Markdown("### 🎧 Audio Player")
-                
-                # Audio player/output section
-                output_audio = gr.Audio(
-                    label="Generated Audio",
-                    interactive=False,
-                    show_label=False
+                    upload_document_file = gr.File(
+                        label="Upload Document file (RAG)",
+                        file_count="single",
+                        file_types=["text", ".pdf", ".doc", ".docx"],
+                        visible=True
+                    )
+                    upload_document_file.change(
+                        toggle_doc_active,
+                        inputs=[upload_document_file],
+                        outputs=[upload_file, upload_document_file, media_active, doc_active, process_btn]
+                    )
+                    upload_file.change(
+                        toggle_media_active,
+                        inputs=[upload_file],
+                        outputs=[upload_file, upload_document_file, media_active, doc_active, process_btn]
+                    )
+                    
+                # RAG Checkbox Toggle
+                rag_checkbox = gr.Checkbox(
+                    label="Enable RAG",
+                    value=False,
+                    info="Toggle to enable/disable document upload and RAG retrieval"
                 )
                 
-                gr.Markdown("### 🖼️ Image Display")
-                
-                # Image display section
-                display_image = gr.Image(
-                    label="Generated Image",
-                    show_label=False
+                rag_checkbox.change(
+                    toggle_rag_ui,
+                    inputs=[rag_checkbox],
+                    outputs=[upload_document_file, process_btn, doc_active]
                 )
-            
-            # Connect the components
-            msg.submit(
-                submit_message, 
-                inputs=[msg, chatbot, upload_file], 
-                outputs=[chatbot, msg, display_image, output_audio]
-            )
-            
-            clear_btn.click(
-                lambda: ([], None, None, None), 
-                None, 
-                [chatbot, upload_file, display_image, output_audio]
-            )
-            
+                
+                # gr.Markdown("### Document Upload (RAG Controlled)")
+                
+        process_btn.click(
+            upload_document,
+            inputs=[upload_document_file]
+        )
+        
+        # Connect the components
+        msg.submit(
+            submit_message,
+            inputs=[msg, chatbot, upload_file, rag_checkbox], 
+            outputs=[chatbot, msg]
+        )
+        
+        clear_btn.click(
+            lambda: ([], "", None, None, None, False, False), 
+            None, 
+            [chatbot, msg, upload_file, upload_document_file, media_active, doc_active]
+        )
+        
     return demo
 
 
 async def main():
     """Main entry point for the Gradio app."""
-    # Test connection to MCP server
-    client = MCPClientWrapper()
-    await client.check_connection()
-    await client._connect()
-    
     # Launch Gradio interface
-    interface = gradio_interface()
+    interface: gr.Blocks = await gradio_interface()
     interface.launch(
         server_name=GRADIO_HOST,
         server_port=GRADIO_PORT,
