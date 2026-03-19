@@ -1,6 +1,6 @@
 """
 FastAPI Server for the MCP Assistant.
-Provides API endpoints for image description and audio transcription using local ML models.
+Provides API endpoints for image description, audio transcription, and document retrieval (RAG).
 """
 import sys
 import os
@@ -10,15 +10,39 @@ from dotenv import load_dotenv
 load_dotenv("./env.dev")
 
 import traceback
+import uuid
+import base64
 import torch
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from typing import Optional, List
+from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
+from fastapi.responses import JSONResponse
 from transformers import AutoModelForCausalLM
 from qwen_asr import Qwen3ASRModel
-from deepseek_vl.models import VLChatProcessor, MultiModalityCausalLM
-from deepseek_vl.utils.io import load_pil_images
+from qdrant_client import QdrantClient
 
-from config import FASTAPI_HOST, FASTAPI_PORT
+from config import (
+    FASTAPI_HOST, 
+    FASTAPI_PORT,
+    QDRANT_HOST,
+    QDRANT_PORT,
+    QDRANT_COLLECTION,
+    EMBEDDING_MODEL,
+    CHUNK_TOKENS,
+    OVERLAP_TOKENS,
+    DEFAULT_RETRIEVAL_LIMIT,
+    DOCUMENT_STORAGE_DIR
+)
+from utils.rag_utils import (
+    RAGPipeline,
+    DocumentIngestion,
+    DocumentChunker,
+    ChunkIndexer,
+    ChunkIngestion,
+    RetrievalEngine,
+    LLMContextValidator,
+    ContextValidator
+)
 
 
 def load_asr_model():
@@ -36,34 +60,30 @@ def load_asr_model():
     )
     return asr_model
 
-
-def load_visual_llm():
-    """Load the DeepSeek-VL visual language model.
-    
-    Returns:
-        Tuple of (processor, model, tokenizer)
-    """
-    model_path = "deepseek-ai/deepseek-vl-1.3b-chat"
-    vl_chat_processor = VLChatProcessor.from_pretrained(model_path)
-    tokenizer = vl_chat_processor.tokenizer
-
-    vl_gpt = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
-    vl_gpt = vl_gpt.to(torch.bfloat16)
-    vl_gpt = vl_gpt.to("mps").eval()
-    
-    return vl_chat_processor, vl_gpt, tokenizer
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler - loads and unloads ML models."""
-    print(f"LOADING ASR MODEL...")
-    app.state.asr_model = load_asr_model()
-    print(f"LOADED ASR MODEL.")
+    # print(f"LOADING ASR MODEL...")
+    # app.state.asr_model = load_asr_model()
+    # print(f"LOADED ASR MODEL.")
     
-    # print(f"LOADING VLM MODEL...")
-    # app.state.vl_chat_processor, app.state.vl_gpt, app.state.tokenizer = load_visual_llm()
-    # print(f"LOADED VLM MODEL...")
+    # Initialize RAG pipeline
+    print(f"INITIALIZING RAG PIPELINE...")
+    try:
+        qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        app.state.rag_pipeline = RAGPipeline(
+            qdrant_client=qdrant_client,
+            collection_name=QDRANT_COLLECTION,
+            embedding_model=EMBEDDING_MODEL,
+            chunk_tokens=CHUNK_TOKENS,
+            overlap_tokens=OVERLAP_TOKENS,
+            storage_dir=DOCUMENT_STORAGE_DIR
+        )
+        print(f"RAG PIPELINE INITIALIZED.")
+    except Exception as e:
+        print(f"ERROR INITIALIZING RAG: {str(e)}")
+        print(traceback.format_exc())
+        app.state.rag_pipeline = None
     
     yield
     
@@ -73,6 +93,8 @@ async def lifespan(app: FastAPI):
     del app.state.vl_chat_processor
     del app.state.vl_gpt
     del app.state.tokenizer
+    if hasattr(app.state, 'rag_pipeline'):
+        del app.state.rag_pipeline
 
 
 app = FastAPI(title="API SERVER", lifespan=lifespan)
@@ -84,76 +106,80 @@ def get_server_health():
     return {"status": "ok"}
 
 
-@app.get("/image/describe")
-async def describe_image(request: Request, prompt: str, file_byte: str) -> dict:
-    """Describe an uploaded image using DeepSeek-VL visual language model.
+# @app.get("/image/describe")
+# async def describe_image(request: Request, prompt: str, file_byte: str) -> dict:
+#     """Describe an uploaded image using DeepSeek-VL visual language model.
     
-    Args:
-        request: FastAPI request object
-        prompt: Text prompt for image description
-        file_byte: Base64 encoded image bytes
+#     Args:
+#         request: FastAPI request object
+#         prompt: Text prompt for image description
+#         file_byte: Base64 encoded image bytes
         
-    Returns:
-        Dictionary with status and description message
-    """
-    try:
-        vl_chat_processor = request.app.state.vl_chat_processor
-        vl_gpt = request.app.state.vl_gpt
-        tokenizer = request.app.state.tokenizer
+#     Returns:
+#         Dictionary with status and description message
+#     """
+#     try:
+#         vl_chat_processor = request.app.state.vl_chat_processor
+#         vl_gpt = request.app.state.vl_gpt
+#         tokenizer = request.app.state.tokenizer
         
-        # Prepare conversation with image placeholder
-        conversation = [
-            {
-                "role": "User",
-                "content": f"<image_placeholder>Describe this image with the detail: {prompt}.",
-                "images": [file_byte]
-            },
-            {
-                "role": "Assistant",
-                "content": ""
-            }
-        ]
+#         # Prepare conversation with image placeholder
+#         conversation = [
+#             {
+#                 "role": "User",
+#                 "content": f"<image_placeholder>Describe this image with the detail: {prompt}.",
+#                 "images": [file_byte]
+#             },
+#             {
+#                 "role": "Assistant",
+#                 "content": ""
+#             }
+#         ]
         
-        # Load images and prepare inputs
-        pil_images = load_pil_images(conversation)
-        prepare_inputs = vl_chat_processor(
-            conversations=conversation,
-            images=pil_images,
-            force_batchify=True
-        ).to(vl_gpt.device)
-        print(f"[DESCRIBE_IMAGE] GOT IMAGE")
+#         # Load images and prepare inputs
+#         pil_images = load_pil_images(conversation)
+#         prepare_inputs = vl_chat_processor(
+#             conversations=conversation,
+#             images=pil_images,
+#             force_batchify=True
+#         ).to(vl_gpt.device)
+#         print(f"[DESCRIBE_IMAGE] GOT IMAGE")
         
-        # Run image encoder to get embeddings
-        inputs_embeds = vl_gpt.prepare_inputs_embeds(**prepare_inputs)
+#         # Run image encoder to get embeddings
+#         inputs_embeds = vl_gpt.prepare_inputs_embeds(**prepare_inputs)
         
-        # Generate response from model
-        outputs = vl_gpt.language_model.generate(
-            inputs_embeds=inputs_embeds,
-            attention_mask=prepare_inputs.attention_mask,
-            pad_token_id=tokenizer.eos_token_id,
-            bos_token_id=tokenizer.bos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            max_new_tokens=512,
-            do_sample=False,
-            use_cache=True
-        )
+#         # Generate response from model
+#         outputs = vl_gpt.language_model.generate(
+#             inputs_embeds=inputs_embeds,
+#             attention_mask=prepare_inputs.attention_mask,
+#             pad_token_id=tokenizer.eos_token_id,
+#             bos_token_id=tokenizer.bos_token_id,
+#             eos_token_id=tokenizer.eos_token_id,
+#             max_new_tokens=512,
+#             do_sample=False,
+#             use_cache=True
+#         )
         
-        answer = tokenizer.decode(outputs[0].cpu().tolist(), skip_special_tokens=True)
-        print(f"[DESCRIBE_IMAGE] Done - Answer: {answer}")
+#         answer = tokenizer.decode(outputs[0].cpu().tolist(), skip_special_tokens=True)
+#         print(f"[DESCRIBE_IMAGE] Done - Answer: {answer}")
         
-        return {
-            "status": "success",
-            "message": answer,
-        }
+#         return {
+#             "status": "success",
+#             "message": answer,
+#         }
     
-    except Exception as e:
-        print(traceback.format_exc())
-        print(f"[SERVER][DESCRIBE_IMAGE] Error: {str(e)}")
-        return {
-            "status": "error",
-            "message": f"Error describing image: {str(e)}"
-        }
+#     except Exception as e:
+#         print(traceback.format_exc())
+#         print(f"[SERVER][DESCRIBE_IMAGE] Error: {str(e)}")
+#         return {
+#             "status": "error",
+#             "message": f"Error describing image: {str(e)}"
+#         }
 
+
+# =============================================================================
+# Audio Transcription
+# =============================================================================
 
 @app.get("/audio/transcribe")
 async def transcribe_audio(request: Request, prompt: str, file_path: str) -> dict:
@@ -184,6 +210,204 @@ async def transcribe_audio(request: Request, prompt: str, file_path: str) -> dic
         return {
             "status": "error",
             "message": f"Error transcribing audio: {str(e)}"
+        }
+
+
+# =============================================================================
+# RAG Document Retrieval Endpoints
+# =============================================================================
+
+@app.post("/document/ingest")
+async def ingest_document(
+    request: Request,
+    file: UploadFile = File(...),
+    chunk_tokens: int = Form(CHUNK_TOKENS),
+    overlap_tokens: int = Form(OVERLAP_TOKENS)
+) -> dict:
+    """
+    Ingest a document into the RAG system.
+    
+    This endpoint handles:
+    1. Document ingestion: Download the uploaded document to a local file
+    2. Chunk document: Chunk the document with adjustable parameters
+    3. Chunk indexing: Create metadata for each chunk
+    4. Chunk ingestion: Store chunks in Qdrant vector database
+    
+    Args:
+        request: FastAPI request object
+        file: Uploaded document file (PDF, DOCX, TXT)
+        document_id: Optional custom document ID
+        chunk_tokens: Number of tokens per chunk
+        overlap_tokens: Overlap between chunks
+        
+    Returns:
+        Dictionary with ingestion status and document info
+    """
+    try:
+        rag_pipeline: RAGPipeline = request.app.state.rag_pipeline
+        if not rag_pipeline:
+            return {
+                "status": "error",
+                "message": "RAG pipeline not initialized"
+            }
+        
+        rag_pipeline.document_chunker.number_of_tokens = chunk_tokens if chunk_tokens else CHUNK_TOKENS
+        rag_pipeline.document_chunker.overlap_tokens = overlap_tokens if overlap_tokens else OVERLAP_TOKENS
+        
+        # Read file content
+        content = await file.read()
+        
+        # Generate document ID
+        document_id = str(uuid.uuid4())
+        
+        # Ingest document
+        result = rag_pipeline.ingest_document(
+            content=content,
+            filename=file.filename,
+            document_id=document_id
+        )
+        
+        return result
+    
+    except Exception as e:
+        print(traceback.format_exc())
+        print(f"[SERVER][INGEST DOCUMENT] Error: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error ingesting document: {str(e)}"
+        }
+
+
+@app.get("/document/retrieval")
+async def retrieve_documents(
+    request: Request,
+    query: str,
+    document_id: Optional[str] = None,
+    limit: int = 10,
+    validate: bool = False
+) -> dict:
+    """
+    Retrieve relevant document segments based on user query.
+    
+    This endpoint handles:
+    1. The main retrieval function: Process user query to abstract intention
+    2. Query the vector database to get retrieved vectors
+    3. Vector to chunks: Trace vectors with appropriate chunks and metadata
+    4. Context validation: Validate query with retrieved chunks (optional)
+    5. Return the retrieved document segments through JSON response
+    
+    Args:
+        request: FastAPI request object
+        query: User query text
+        document_id: Optional filter by specific document ID
+        limit: Maximum number of results to return
+        validate: Whether to run context validation
+        
+    Returns:
+        Dictionary with retrieval results
+    """
+    try:
+        rag_pipeline: RAGPipeline = request.app.state.rag_pipeline
+        if not rag_pipeline:
+            return {
+                "status": "error",
+                "message": "RAG pipeline not initialized"
+            }
+        
+        # Retrieve documents
+        result = await rag_pipeline.retrieve(
+            query=query,
+            limit=limit,
+            document_id=document_id,
+            validate=validate
+        )
+        
+        return {
+            "status": "success",
+            "message": result,
+        }
+    
+    except Exception as e:
+        print(traceback.format_exc())
+        print(f"[SERVER][RETRIEVE DOCUMENTS] Error: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error retrieving documents: {str(e)}"
+        }
+
+@app.delete("/document/{document_id}")
+async def delete_document(
+    request: Request,
+    document_id: str
+) -> dict:
+    """
+    Delete a document and its associated chunks.
+    
+    Args:
+        request: FastAPI request object
+        document_id: ID of the document to delete
+        
+    Returns:
+        Dictionary with deletion status
+    """
+    try:
+        rag_pipeline: RAGPipeline = request.app.state.rag_pipeline
+        if not rag_pipeline:
+            return {
+                "status": "error",
+                "message": "RAG pipeline not initialized"
+            }
+        
+        success = rag_pipeline.delete_document(document_id)
+        
+        return {
+            "status": "success" if success else "error",
+            "message": "Document deleted successfully" if success else "Failed to delete document"
+        }
+    
+    except Exception as e:
+        print(traceback.format_exc())
+        print(f"[SERVER][DELETE DOCUMENT] Error: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error deleting document: {str(e)}"
+        }
+
+
+@app.get("/document/health")
+async def get_rag_health(request: Request) -> dict:
+    """
+    Check RAG pipeline health status.
+    
+    Args:
+        request: FastAPI request object
+        
+    Returns:
+        Dictionary with RAG health status
+    """
+    try:
+        rag_pipeline: RAGPipeline = request.app.state.rag_pipeline
+        if not rag_pipeline:
+            return {
+                "status": "error",
+                "message": "RAG pipeline not initialized",
+                "healthy": False
+            }
+        
+        return {
+            "status": "success",
+            "healthy": True,
+            "collection": QDRANT_COLLECTION,
+            "embedding_model": EMBEDDING_MODEL,
+            "chunk_tokens": CHUNK_TOKENS,
+            "overlap_tokens": OVERLAP_TOKENS
+        }
+    
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "healthy": False
         }
 
 

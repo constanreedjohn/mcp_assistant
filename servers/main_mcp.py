@@ -14,7 +14,7 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from utils.logging_utils import logger
 from utils.weather_utils import make_nws_request, format_alert
-from config import NWS_API_BASE, IMAGE_GEN_URL
+from config import NWS_API_BASE, MAIN_API_URL
 
 mcp = FastMCP(name="MainMcpServer")
 
@@ -180,7 +180,7 @@ async def get_forecast(latitude: str, longtitude: str, ctx: Context) -> str | Ca
 
 @mcp.tool(
     annotations={
-        "title": "Generate an image description from the uploaded image."
+        "title": "Provide image description from the uploaded image."
     }
 )
 async def describe_image(prompt: str, ctx: Context) -> dict:
@@ -195,7 +195,7 @@ async def describe_image(prompt: str, ctx: Context) -> dict:
             "prompt": prompt,
             "file_byte": "../input.jpg"
         }
-        response = requests.get(f"{IMAGE_GEN_URL}/image/describe", params=params)
+        response = requests.get(f"{MAIN_API_URL}/image/describe", params=params)
         # First check if the request was successful (HTTP 200)
         if response.status_code == 200:
             try:
@@ -247,7 +247,7 @@ async def transcribe_audio(prompt: str, ctx: Context) -> dict:
             "prompt": prompt,
             "file_path": "../input_audio.wav"
         }
-        response = requests.get(f"{IMAGE_GEN_URL}/audio/transcribe", params=params)
+        response = requests.get(f"{MAIN_API_URL}/audio/transcribe", params=params)
         # First check if the request was successful (HTTP 200)
         if response.status_code == 200:
             try:
@@ -279,6 +279,61 @@ async def transcribe_audio(prompt: str, ctx: Context) -> dict:
         return {
             "status": "failed",
             "message": "Failed to generate image"
+        }
+        
+@mcp.tool(
+    annotations={
+        "title": "Perform RAG functionality."
+    }
+)
+async def retrieve_documents(query: str, limit: int = 10, validate: bool = False, ctx: Context = None) -> dict:
+    """Call request to document retrieval endpoint.
+    
+    Args:
+        query: str -  User query for the document retrieval
+        limit: int - Number of chunks returned
+        validate: bool - Whether to use LLM-as-a-judge
+    """
+    logger.info(f"[SERVER][RAG] Triggered")
+    try:
+        params = {
+            "query": query,
+            "document_id": None,
+            "limit": limit,
+            "validate": False
+        }
+        response = requests.get(f"{MAIN_API_URL}/document/retrieval", params=params)
+        # First check if the request was successful (HTTP 200)
+        if response.status_code == 200:
+            try:
+                data = response.json()  # Use response.json() instead of json.loads(response.content)
+                
+                if data["status"] == "success":                    
+                    logger.info(f"[SERVER][RAG] Got reponse {data['message']}")
+                    logger.info(f"[SERVER][RAG] Done")
+                    return data
+                else:
+                    logger.info(f"[SERVER][RAG] Failed: {data}")
+                    return data
+                
+            except ValueError:
+                logger.info(f"[SERVER][RAG] Failed: Invalid JSON response")
+                return {
+                    "status": "error",
+                    "message": "Invalid response format from image generation service"
+                }
+        else:
+            logger.info(f"[SERVER][RAG] Failed: HTTP {response.status_code}")
+            return {
+                "status": "failed",
+                "message": f"Document retrieval service returned HTTP {response.status_code}"
+            }
+        
+    except Exception as e:
+        logger.info(f"[SERVER][RAG] Done")
+        return {
+            "status": "failed",
+            "message": "Failed to retrieve document."
         }
 
 if __name__ == "__main__":

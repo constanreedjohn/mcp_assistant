@@ -24,3 +24,8 @@ attrdict
 einops
 accelerate==1.12.0
 qwen-asr==0.0.6
+# RAG dependencies
+qdrant-client
+sentence-transformers
+PyPDF2
+python-docx
