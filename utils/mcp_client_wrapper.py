@@ -541,13 +541,6 @@ class MCPClientWrapper:
                 result_messages=self.result_messages,
                 tool_name=tool_name
             )
-        elif tool_name == "retrieve_documents":
-            result = await call_get_retrieve_document(
-                mcp_client=self.mcp_client,
-                tool_args=tool_args,
-                result_messages=self.result_messages,
-                tool_name=tool_name
-            )
             
         logger.info(f"[RESULT MES] RESULT TOOL CALL MESSAGE: {self.result_messages}")
         return result
@@ -586,12 +579,6 @@ class MCPClientWrapper:
         if tool_name == "generate_image":
             tool_response = await add_image_tool_response(
                 result=tool_args.get("prompt", ""),
-                tool_id=tool_id,
-                tool_name=tool_name
-            )
-        elif tool_name == "retrieve_documents":
-            tool_response = await add_document_tool_response(
-                result=result,
                 tool_id=tool_id,
                 tool_name=tool_name
             )

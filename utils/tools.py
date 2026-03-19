@@ -5,32 +5,6 @@ def get_tool_definition():
     {
         "type": "function",
         "function": {
-            "name": "retrieve_documents",
-            "description": "Retrieve relevant context from the documents to provide information for the user.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "A text prompt of the user request."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "The number of the retrieved chunks"
-                    },
-                    "validate": {
-                        "type": "boolean",
-                        "description": "Whether to validate the context of the retrieved chunks."
-                    },
-                },
-                "required": ["query"]
-            },
-            "strict": True,
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "transcribe_audio",
             "description": "Transcribe from a given audio file.",
             "parameters": {

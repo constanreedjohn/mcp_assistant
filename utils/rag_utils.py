@@ -694,7 +694,6 @@ class LLMContextValidator(ContextValidator):
         Returns:
             Filtered list of RetrievalResult objects
         """
-        # TODO: Implement LLM-based filtering
         # Example: Use LLM to score each chunk's relevance
         
         # Default: return all chunks above threshold
