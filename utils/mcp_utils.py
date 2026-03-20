@@ -13,107 +13,107 @@ from fastmcp.client.client import CallToolResult
 from utils.constants import DEFAULT_INPUT_AUDIO, DEFAULT_INPUT_IMAGE
 
 
-async def call_image_generation_tool(
-    mcp_client: Client, 
-    tool_args: Dict,
-    result_messages: List[Dict],
-    tool_name: str
-) -> List[Dict] | CallToolResult | str | Dict:
+# async def call_image_generation_tool(
+#     mcp_client: Client, 
+#     tool_args: Dict,
+#     result_messages: List[Dict],
+#     tool_name: str
+# ) -> List[Dict] | CallToolResult | str | Dict:
     
-    try:
-        async with mcp_client:
-            result: CallToolResult = await mcp_client.call_tool(
-                name="generate_image", 
-                arguments=dict(
-                    prompt=tool_args.get("prompt", ""),
-                    width=tool_args.get("width", 512),
-                    height=tool_args.get("height", 512)
-                )
-            )
+#     try:
+#         async with mcp_client:
+#             result: CallToolResult = await mcp_client.call_tool(
+#                 name="generate_image", 
+#                 arguments=dict(
+#                     prompt=tool_args.get("prompt", ""),
+#                     width=tool_args.get("width", 512),
+#                     height=tool_args.get("height", 512)
+#                 )
+#             )
         
-        # Update the status of the tool call
-        if result_messages and "metadata" in result_messages[-2]:
-            result_messages[-2]["metadata"]["status"] = "done"
+#         # Update the status of the tool call
+#         if result_messages and "metadata" in result_messages[-2]:
+#             result_messages[-2]["metadata"]["status"] = "done"
         
-        # Add a header for the tool results
-        result_messages.append({
-            "role": "assistant",
-            "content": "Here are the results from the tool:",
-            "metadata": {
-                "title": f"Tool Result for {tool_name}",
-                "status": "done",
-                "id": f"result_{tool_name}"
-            }
-        })
-    except TimeoutError as e:
-        print("Request timed out")
-        result = [{"text": "Request timed out"}]
-        result_messages.append({
-            "role": "assistant",
-            "content": "```\nRequest timed out\n```",
-            "metadata": {
-                "parent_id": f"result_{tool_name}",
-                "id": f"raw_result_{tool_name}",
-                "status": "done",
-                "title": "Raw Output"
-            }
-        })
-        raise TimeoutError(e)
-    except Exception as e_else:
-        result = [{"text": "Fail to get the server response"}]
-        result_messages.append({
-            "role": "assistant",
-            "content": "```\n" + result + "\n```",
-            "metadata": {
-                "parent_id": f"result_{tool_name}",
-                "id": f"raw_result_{tool_name}",
-                "status": "done",
-                "title": "Raw Output"
-            }
-        })
-        raise Exception(e_else)
+#         # Add a header for the tool results
+#         result_messages.append({
+#             "role": "assistant",
+#             "content": "Here are the results from the tool:",
+#             "metadata": {
+#                 "title": f"Tool Result for {tool_name}",
+#                 "status": "done",
+#                 "id": f"result_{tool_name}"
+#             }
+#         })
+#     except TimeoutError as e:
+#         print("Request timed out")
+#         result = [{"text": "Request timed out"}]
+#         result_messages.append({
+#             "role": "assistant",
+#             "content": "```\nRequest timed out\n```",
+#             "metadata": {
+#                 "parent_id": f"result_{tool_name}",
+#                 "id": f"raw_result_{tool_name}",
+#                 "status": "done",
+#                 "title": "Raw Output"
+#             }
+#         })
+#         raise TimeoutError(e)
+#     except Exception as e_else:
+#         result = [{"text": "Fail to get the server response"}]
+#         result_messages.append({
+#             "role": "assistant",
+#             "content": "```\n" + result + "\n```",
+#             "metadata": {
+#                 "parent_id": f"result_{tool_name}",
+#                 "id": f"raw_result_{tool_name}",
+#                 "status": "done",
+#                 "title": "Raw Output"
+#             }
+#         })
+#         raise Exception(e_else)
     
-    print(f"[TOOL CALL] Generate_image: Result - {result} - {type(result)}")
-    result_content = result.data
-    byte_data = base64.b64decode(result_content)
+#     print(f"[TOOL CALL] Generate_image: Result - {result} - {type(result)}")
+#     result_content = result.data
+#     byte_data = base64.b64decode(result_content)
                     
-    try:
-        print(f"[TOOL CALL] result JSON: {result_content}")
-        if isinstance(byte_data, bytes):
-            result_messages.append({
-                "role": "assistant",
-                "content": "Here are the results from the tool:",
-                "metadata": {
-                    "parent_id": f"result_{tool_name}",
-                    "id": f"image_{tool_name}",
-                    "status": "done",
-                    "title": "Generated Image"
-                }
-            })
-        else:
-            result_messages.append({
-                "role": "assistant",
-                "content": "Failed to get the generated image.",
-                "metadata": {
-                    "parent_id": f"result_{tool_name}",
-                    "id": f"raw_result_{tool_name}",
-                    "status": "done",
-                    "title": "Raw Output"
-                }
-            })
-    except Exception as err:
-        result_messages.append({
-            "role": "assistant",
-            "content": "Failed to get the generated image.",
-            "metadata": {
-                "parent_id": f"result_{tool_name}",
-                "id": f"raw_result_{tool_name}",
-                "title": "Raw Output",
-                "status": "done",
-            }
-        })
-        raise Exception(err)
-    return result
+#     try:
+#         print(f"[TOOL CALL] result JSON: {result_content}")
+#         if isinstance(byte_data, bytes):
+#             result_messages.append({
+#                 "role": "assistant",
+#                 "content": "Here are the results from the tool:",
+#                 "metadata": {
+#                     "parent_id": f"result_{tool_name}",
+#                     "id": f"image_{tool_name}",
+#                     "status": "done",
+#                     "title": "Generated Image"
+#                 }
+#             })
+#         else:
+#             result_messages.append({
+#                 "role": "assistant",
+#                 "content": "Failed to get the generated image.",
+#                 "metadata": {
+#                     "parent_id": f"result_{tool_name}",
+#                     "id": f"raw_result_{tool_name}",
+#                     "status": "done",
+#                     "title": "Raw Output"
+#                 }
+#             })
+#     except Exception as err:
+#         result_messages.append({
+#             "role": "assistant",
+#             "content": "Failed to get the generated image.",
+#             "metadata": {
+#                 "parent_id": f"result_{tool_name}",
+#                 "id": f"raw_result_{tool_name}",
+#                 "title": "Raw Output",
+#                 "status": "done",
+#             }
+#         })
+#         raise Exception(err)
+#     return result
 
 
 async def call_image_describe_tool(
@@ -439,71 +439,6 @@ async def call_transcribe_audio_tool(
         
     return content_message
 
-async def call_get_retrieve_document(
-    mcp_client: Client,
-    tool_args: Dict,
-    result_messages: List[Dict],
-    tool_name: str
-) -> List[Dict] | CallToolResult | str | Dict:
-    try:
-        async with mcp_client:
-            result: CallToolResult = await mcp_client.call_tool(
-                name="retrieve_documents",
-                arguments=dict(
-                    query=tool_args.get("query", ""),
-                    limit=tool_args.get("limit", 10),
-                    validate=tool_args.get("validate", False)
-                )
-            )
-        
-        # Update the status of the tool call
-        if result_messages and "metadata" in result_messages[-2]:
-            result_messages[-2]["metadata"]["status"] = "done"
-        
-        # Add a header for the tool results
-            result_messages.append({
-                "role": "assistant",
-                "content": "Here are the results from the tool:",
-                "metadata": {
-                    "title": f"Tool Result for {tool_name}",
-                    "status": "done",
-                    "id": f"result_{tool_name}"
-                }
-            })
-    except Exception as e:
-        print(traceback.format_exc(), e)
-        result = "Fail to get the server response."
-        result_messages.append({
-            "role": "assistant",
-            "content": "```\n" + result + "\n```",
-            "metadata": {
-                "parent_id": f"result_{tool_name}",
-                "id": f"raw_result_{tool_name}",
-                "status": "done",
-                "title": "Raw Output"
-            }
-        })
-        raise Exception(e)
-        
-    print(f"[TOOL CALL] Document_retrieval: Result - {result} - {type(result)}")
-    # Process the result content - assuming result is a string
-    result_content: dict = result.structured_content
-    content_message = f"The retrieved chunks of document are: \'{result_content['message']['results']}\'"
-    print(f"[TOOL_CALL] GOT DOCUMENTS: {content_message}")
-    
-    result_messages.append({
-        "role": "assistant",
-        "content": "```\n" + content_message + "\n```",
-        "metadata": {
-            "parent_id": f"result_{tool_name}",
-            "id": f"raw_result_{tool_name}",
-            "title": "Raw Output",
-            "status": "done",
-        }
-    })
-        
-    return content_message
-
 async def add_tool_response(
     result: List[Dict] | Dict | str | CallToolResult,
     tool_id: str,
@@ -565,9 +500,6 @@ async def add_document_tool_response(
     tool_name: str | None
 ) -> Optional[Dict] | Optional[str]:
     tool_response = {
-        "role": "tool",
-        "tool_name": tool_name,
-        "tool_call_id": tool_id,
         "content": ""
     }
     if isinstance(result, CallToolResult):

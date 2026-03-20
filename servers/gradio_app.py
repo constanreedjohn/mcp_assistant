@@ -26,9 +26,9 @@ async def gradio_interface():
             return gr.update(visible=True, interactive=True), gr.update(visible=False, interactive=False, value=None), True, False, gr.update(interactive=False)
         return gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), False, False, gr.update(interactive=True)
 
-    def toggle_doc_active(file):
-        if file is not None:
-            return gr.update(visible=False, interactive=False, value=None), gr.update(visible=True, interactive=True), False, True, gr.update(interactive=True)
+    def toggle_doc_active(files):
+        if (files is not None) and len(files) != 0:  # Handles list (empty=[], non-empty=[files]) or single str
+            return gr.update(visible=False, interactive=False, value=None), gr.update(visible=True, interactive=True), False, True, gr.update(interactive=False)
         return gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), False, False, gr.update(interactive=True)
 
     def toggle_rag_ui(rag_enabled):
@@ -37,7 +37,7 @@ async def gradio_interface():
         return gr.update(visible=doc_visible, interactive=doc_visible), gr.update(visible=doc_visible), doc_visible
 
     def upload_document(document_file):
-        client.process_document_file(document_file)
+        client._process_document_file(document_file)
     
     async def submit_message(message, chat_history, upload_media, rag_enabled):
         """Handle message submission and stream responses."""
@@ -52,7 +52,7 @@ async def gradio_interface():
         yield chat_history, ""
         
         # Now stream the assistant's response and update the chat
-        async for updated_history, textbox in client.process_message(message, chat_history, upload_media, rag_enabled):
+        async for updated_history, textbox in client._process_message(message, chat_history, upload_media, rag_enabled):
             yield updated_history, textbox
     
     with gr.Blocks(title="MCP Weather Client") as demo:
@@ -100,9 +100,9 @@ async def gradio_interface():
                         visible=True
                     )
                     upload_document_file = gr.File(
-                        label="Upload Document file (RAG)",
-                        file_count="single",
-                        file_types=["text", ".pdf", ".doc", ".docx"],
+                        label="Upload PDF file(s) (RAG)",
+                        file_count="directory",
+                        file_types=[".pdf"],
                         visible=True
                     )
                     upload_document_file.change(

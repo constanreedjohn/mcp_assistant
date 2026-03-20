@@ -99,8 +99,8 @@ EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-M
 EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "mps")
 
 # Chunking settings
-CHUNK_TOKENS: int = int(os.getenv("CHUNK_TOKENS", "128"))
-OVERLAP_TOKENS: int = int(os.getenv("OVERLAP_TOKENS", "50"))
+CHUNK_TOKENS: int = int(os.getenv("CHUNK_TOKENS", "512"))
+OVERLAP_TOKENS: int = int(os.getenv("OVERLAP_TOKENS", "128"))
 
 # Retrieval settings
 DEFAULT_RETRIEVAL_LIMIT: int = int(os.getenv("DEFAULT_RETRIEVAL_LIMIT", "5"))

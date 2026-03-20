@@ -1,12 +1,14 @@
 """
 RAG (Retrieval Augmented Generation) utilities for document processing and retrieval.
 """
-import os
+import asyncio
+import time
 import uuid
 import hashlib
 import tempfile
 import json
 from pathlib import Path
+from functools import partial
 from .logging_utils import logger
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
@@ -30,7 +32,7 @@ except ImportError:
     SentenceTransformer = None
 
 # For vector storage
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 
 # Tokenizer for chunking
@@ -44,10 +46,11 @@ from openai import AsyncOpenAI
 from .constants import (
     INTENT_EXTRACTION_PROMP,
     DEFAULT_LLM_MODEL,
+    DEFAULT_SLM_MODEL,
     VALIDATION_PROMPT,
     RAG_RESPONSE_PROMPT
 )
-from config import LLAMACPP_LLM_URL
+from config import LLAMACPP_LLM_URL, SLM_URL
 
 # =============================================================================
 # Data Classes
@@ -374,7 +377,7 @@ class ChunkIngestion:
     
     def __init__(
         self,
-        qdrant_client: QdrantClient,
+        qdrant_client: AsyncQdrantClient,
         collection_name: str = "document_chunks",
         embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         vector_size: int = 384
@@ -395,7 +398,7 @@ class ChunkIngestion:
         # Initialize embedding model
         if SentenceTransformer:
             try:
-                self.embedding_model = SentenceTransformer(embedding_model)
+                self.embedding_model = SentenceTransformer(embedding_model, device="mps")
                 self.vector_size = self.embedding_model.get_sentence_embedding_dimension()
             except Exception:
                 self.embedding_model = None
@@ -405,9 +408,9 @@ class ChunkIngestion:
         # Create collection if not exists
         self._ensure_collection()
     
-    def _ensure_collection(self) -> None:
+    async def _ensure_collection(self) -> None:
         """Ensure the collection exists."""
-        collections = self.client.get_collections().collections
+        collections = await self.client.get_collections().collections
         collection_names = [c.name for c in collections]
         
         if self.collection_name not in collection_names:
@@ -419,17 +422,23 @@ class ChunkIngestion:
                 )
             )
     
-    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Get embeddings for texts."""
         if self.embedding_model:
-            embeddings = self.embedding_model.encode(texts, convert_to_numpy=True)
+            loop = asyncio.get_event_loop()
+            encode_fn = partial(
+                self.embedding_model.encode,
+                texts,
+                convert_to_numpy=True,
+                device="mps",
+            )
+            embeddings = await loop.run_in_executor(None, encode_fn)
             return embeddings.tolist()
         else:
-            # Return random vectors as placeholder if no model
             import numpy as np
             return np.random.rand(len(texts), self.vector_size).tolist()
     
-    def ingest_chunks(self, chunks: List[Chunk]) -> bool:
+    async def ingest_chunks(self, chunks: List[Chunk]) -> bool:
         """
         Ingest chunks into Qdrant.
         
@@ -444,7 +453,7 @@ class ChunkIngestion:
         
         # Get embeddings for all chunks
         texts = [chunk.text for chunk in chunks]
-        embeddings = self.get_embeddings(texts)
+        embeddings = await self.get_embeddings(texts)
         
         # Create points for insertion
         points = []
@@ -465,7 +474,7 @@ class ChunkIngestion:
             points.append(point)
         
         # Upsert to Qdrant
-        self.client.upsert(
+        await self.client.upsert(
             collection_name=self.collection_name,
             points=points,
             wait=True
@@ -473,7 +482,7 @@ class ChunkIngestion:
         
         return True
     
-    def delete_chunks(self, document_id: str) -> bool:
+    async def delete_chunks(self, document_id: str) -> bool:
         """
         Delete all chunks for a document.
         
@@ -489,7 +498,7 @@ class ChunkIngestion:
         )
         
         # Delete points
-        self.client.delete(
+        await self.client.delete(
             collection_name=self.collection_name,
             points_selector=filter_condition,
             wait=True
@@ -497,7 +506,7 @@ class ChunkIngestion:
         
         return True
     
-    def search(
+    async def search(
         self, 
         query: str, 
         limit: int = 5,
@@ -515,7 +524,7 @@ class ChunkIngestion:
             List of RetrievalResult objects
         """
         # Get query embedding
-        query_embedding = self.get_embeddings([query])[0]
+        query_embedding = (await self.get_embeddings([query]))[0]
         
         # Build filter if document_id provided
         query_filter = None
@@ -525,7 +534,7 @@ class ChunkIngestion:
             )
         
         # Search Qdrant
-        results = self.client.query_points(
+        results = await self.client.query_points(
             collection_name=self.collection_name,
             query=query_embedding,
             query_filter=query_filter,
@@ -614,10 +623,10 @@ class LLMContextValidator(ContextValidator):
             llm_client: Optional LLM client for making inference calls
         """
         self.slm_validator = AsyncOpenAI(
-            base_url=f"{LLAMACPP_LLM_URL}/v1",
+            base_url=f"{SLM_URL}/v1",
             api_key='llama.cpp',  # required, but unused
         )
-        self.validator_model_name = DEFAULT_LLM_MODEL # DEFAULT_SLM_MODEL
+        self.validator_model_name = DEFAULT_SLM_MODEL # DEFAULT_SLM_MODEL
     
     async def extract_intention(self, query: str):
         self.messages = [
@@ -728,11 +737,12 @@ class RetrievalEngine:
         self.intent_processor = intent_processor
         self.response_prompt = RAG_RESPONSE_PROMPT
     
-    async def get_response_prompt(self, retrieved_document: list):
+    async def get_response_prompt(self, query, retrieved_document: list):
         return {
-            "role": "assistant", 
+            "role": "assistant",
             "content": self.response_prompt.format(
-                retrieved_document=[i["text"] for i in retrieved_document]
+                query=query,
+                retrieved_document=[i["text"] for i in retrieved_document["results"]]
             )
         }
     async def process_query(self, user_query: str) -> str:
@@ -769,15 +779,23 @@ class RetrievalEngine:
         Returns:
             List of RetrievalResult objects
         """
+        
         # Process query to get intent
+        start_pre_intent_rag = time.perf_counter()
         intent = await self.process_query(user_query)
+        end_pre_intent_Rag = time.perf_counter() - start_pre_intent_rag
         
         # Search vector database
-        results = self.chunk_ingestion.search(
+        start_search_rag = time.perf_counter()
+        results = await self.chunk_ingestion.search(
             query=intent,
             limit=limit,
             document_id=document_id
         )
+        end_search_rag = time.perf_counter() - start_search_rag
+        
+        # logger.info(f"[LATENCY] PREPROCESS INTENT RAG: {end_pre_intent_Rag:.2f}\n")
+        # logger.info(f"[LATENCY] SEARCH DOCUMENT RAG: {end_search_rag:.2f}\n")
         
         return results, intent
     
@@ -826,7 +844,7 @@ class RAGPipeline:
     
     def __init__(
         self,
-        qdrant_client: QdrantClient,
+        qdrant_client: AsyncQdrantClient,
         collection_name: str = "document_chunks",
         embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         chunk_tokens: int = 512,
