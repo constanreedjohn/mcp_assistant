@@ -25,7 +25,7 @@ def gradio_interface():
         yield chat_history, "", None, None
         
         # Now stream the assistant's response and update the chat
-        async for updated_history, textbox, image_data, audio_data in client.process_message(message, chat_history, upload_media):
+        async for updated_history, textbox, image_data, audio_data in client._process_message(message, chat_history, upload_media):
             yield updated_history, textbox, image_data, audio_data
     
     with gr.Blocks(title="MCP Weather Client") as demo:

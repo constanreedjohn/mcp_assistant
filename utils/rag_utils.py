@@ -728,11 +728,12 @@ class RetrievalEngine:
         self.intent_processor = intent_processor
         self.response_prompt = RAG_RESPONSE_PROMPT
     
-    async def get_response_prompt(self, retrieved_document: list):
+    async def get_response_prompt(self, query, retrieved_document: list):
         return {
-            "role": "assistant", 
+            "role": "assistant",
             "content": self.response_prompt.format(
-                retrieved_document=[i["text"] for i in retrieved_document]
+                query=query,
+                retrieved_document=[i["text"] for i in retrieved_document["results"]]
             )
         }
     async def process_query(self, user_query: str) -> str:
