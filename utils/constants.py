@@ -88,7 +88,7 @@ INTENT_CLASSIFIER_PROMPT = """You are an intent classifier, your task is to repo
 -------------
 RULES:
 * Based on the context of the QUERY, response with only 'tool' or 'chat'.
-* If the QUERY contains relevant information relate to these keywords: ['transcribe audio', 'provide weather forecast', 'provide weather alerts', 'document search', 'retrieve document chunk'], response 'tool'.
+* If the QUERY contains relevant information relate to these keywords: ['transcribe audio', 'provide weather forecast', 'provide weather alerts'], response 'tool'.
 * If the QUERY does not contain relevant information in those keywords or just a general conversation knowledge, then response 'chat'.
 -------------
 QUERY: {query_message}

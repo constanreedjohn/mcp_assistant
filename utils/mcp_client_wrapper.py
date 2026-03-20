@@ -16,7 +16,7 @@ from PIL import Image
 import soundfile as sf
 from fastmcp import Client
 from openai import AsyncOpenAI
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, AsyncQdrantClient
 from gradio.components.chatbot import ChatMessage
 
 from .tools import tool_definition_list
@@ -115,7 +115,7 @@ class MCPClientWrapper:
         self.slm_client = SLMClientWrapper()
         
         # RAG Init
-        self.qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        self.qdrant_client = AsyncQdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
         self.rag_pipeline = RAGPipeline(
             qdrant_client=self.qdrant_client,
             collection_name=QDRANT_COLLECTION,
@@ -163,8 +163,6 @@ class MCPClientWrapper:
             messages=prompt_series,
             stream=True
         )
-        
-        self.claude_messages = [self.sys_prompt]
         
         partial_content = ""
         async for chunk in final_response:
@@ -230,253 +228,7 @@ class MCPClientWrapper:
                 file_type = "audio"
         
         return file_type, image_data, audio_data
-
-    def _process_document_file(
-        self,
-        files
-    ):
-        logger.info(f"[INGEST DOCUMENT] INGESTING DOCUMENT(S)...")
-        
-        # Normalize to list
-        if isinstance(files, str):
-            files = [files]
-        elif files is None:
-            files = []
-        
-        processed = 0
-        for file_path in files:
-            if not file_path or not file_path.lower().endswith('.pdf'):
-                logger.info(f"[INGEST DOCUMENT] Skipping non-PDF: {file_path}")
-                continue
-                
-            try:
-                filename = Path(file_path).name
-                logger.info(f"[INGEST DOCUMENT] Processing {filename}...")
-                
-                with open(file_path, 'rb') as fin:
-                    file_bytes = fin.read()
-                
-                logger.info(f"[INGEST DOCUMENT] Read {len(file_bytes)} bytes from {filename}")
-                
-                # Unique ID per file
-                document_id = str(uuid.uuid4())
-                
-                result = self.rag_pipeline.ingest_document(
-                    content=file_bytes,
-                    document_id=document_id,
-                    filename=filename
-                )
-                logger.info(f"[INGEST DOCUMENT] Ingested {filename} (ID: {document_id}, chunks: {result['num_chunks']})")
-                processed += 1
-                
-            except Exception as e:
-                logger.error(f"[DOCUMENT][INGESTION] Failed {file_path}: {e}")
-                logger.error(traceback.format_exc())
-        
-        logger.info(f"[INGEST DOCUMENT] Completed processing {processed}/{len(files)} PDF(s)")
-
-                
-    async def _process_message(
-        self, 
-        text_query: str, 
-        history: List[Union[Dict[str, Any], ChatMessage]], 
-        upload_media=None,
-        rag_enabled: bool = True,
-    ):
-        """Process user message and stream response.
-        
-        Args:
-            text_query: User's text input
-            history: Chat history
-            upload_media: Optional uploaded file (image or audio)
-            
-        Yields:
-            Updated chat history, textbox value, image data, audio data
-        """
-        # Determine file type and process
-        file_type, image_data, audio_data = self._get_file_type(upload_media)
-        
-        # Async generator to stream partial responses
-        async for partial_messages in self._process_main_query(
-            text_query, history, image_data, audio_data, rag_enabled
-        ):
-            yield history + partial_messages, ""
     
-    async def _process_main_query(
-        self, 
-        text_query: str, 
-        history: List[Union[Dict[str, Any], ChatMessage]], 
-        img: Image.Image = None, 
-        audio_bytes: Tuple[List, int] = None,
-        rag_enabled: bool = True,
-    ):
-        """Internal query processing with tool handling.
-        
-        Args:
-            text_query: User's text input
-            history: Chat history
-            img: Optional PIL Image
-            audio_bytes: Optional tuple of (audio array, sample rate)
-            
-        Yields:
-            Partial messages, image data, audio data
-        """
-        
-        self.tool_monitor_messages = [self.tool_sys_prompt]
-                
-        # ============================================================================
-        # Build conversation history
-        # ============================================================================
-        
-        for msg in history:
-            if isinstance(msg, ChatMessage):
-                role, content = msg.role, msg.content
-            else:
-                role, content = msg.get("role", "assistant"), msg.get("content")
-            
-            if isinstance(content, list):
-                content = content[0].get("text", "")
-            
-            if role in ["user", "assistant", "system"]:
-                self.claude_messages.append({"role": role, "content": content})
-        
-        # ============================================================================
-        # RAG mode
-        # ============================================================================
-        if rag_enabled:
-            logger.info(f"[RAG] TRIGGERED RAG MODE.")
-            try:
-                if not self.rag_pipeline:
-                    logger.info(f"[RAG] Error - RAG pipeline not initialized")
-                
-                # Retrieve documents
-                result = await self.rag_pipeline.retrieve(
-                    query=text_query,
-                    limit=10,
-                    document_id=None,
-                    validate=False
-                )
-                
-                # Post process retrieved chunks into main LLM
-                rag_response = await add_document_tool_response(
-                    result=result,
-                    tool_id=None,
-                    tool_name=None
-                )
-                
-                # Add RAG prompt into the main LLM prompts.
-                rag_prompt = await self.rag_pipeline.retrieval_engine.get_response_prompt(
-                    query=result['query'],
-                    retrieved_document=rag_response["content"]
-                )
-                self.claude_messages.append(rag_prompt)
-                logger.info(f"[RAG] CLAUDE MESSAGE WITH RAG: {self.claude_messages}")
-                
-                # Stream response - consume async gen
-                async for chunk in self._stream_final_response(client=self.llm, prompt_series=self.claude_messages):
-                    yield chunk
-            
-            except Exception as e:
-                logger.info(traceback.format_exc())
-                logger.info(f"[RAG] Error: {str(e)}")
-            
-        else:
-            # ============================================================================
-            # Intent classification using SLM
-            # ============================================================================
-            
-            start_pre = time.perf_counter()
-            pre_context_classifier = await self.slm_client.classify_intent(user_q=text_query)
-            end_pre = time.perf_counter() - start_pre
-            logger.info(f"[PRE_CLASSIFIER] TIME: {end_pre:.2f} {pre_context_classifier}\n")
-            
-            output_image_byte = None
-            output_audio_data = None
-            
-            # ============================================================================
-            # Handle regular text response (chat)
-            # ============================================================================
-
-            if pre_context_classifier == "chat":
-                logger.info(f">>>> NO CONTEXT TRIGGERED\n\n")
-                
-                # Handle image description if available
-                if img:
-                    base64_image = await encode_image(DEFAULT_INPUT_IMAGE)
-                    
-                    self.claude_messages += [
-                        {
-                            "role": "user",
-                            "content": [
-                                { "type": "text", "text": text_query },
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/jpeg;base64,{base64_image}",
-                                    }
-                                },
-                            ],
-                        }
-                    ]
-                
-                # Stream response - consume async gen
-                async for chunk in self._stream_final_response(client=self.slm_client.slm, prompt_series=self.claude_messages):
-                    yield chunk
-                
-            # ============================================================================
-            # MCP Tool Calling
-            # ============================================================================
-            
-            elif pre_context_classifier == "tool":
-                # Tool function router/decision
-                response = await self._get_model_response_tool(self.claude_messages, history=history)
-                choice = response.choices[0]
-                logger.info(f"[FIRST CHOICE] - {choice}")
-                first_response = choice.message
-                
-                logger.info(f">>>> TOOL TRIGGERED\n\n")
-
-                # There maybe more than one tool used - handle tools sequentially.
-                if first_response.tool_calls:
-                    for tool_call in first_response.tool_calls:
-                        tool_id = tool_call.id
-                        tool_name = tool_call.function.name
-                        logger.info(f"[TOOL] - {tool_id} - {tool_name}")
-                        
-                        # Parse generated tool arguments from the LLM
-                        try:
-                            tool_args = json.loads(tool_call.function.arguments)
-                        except json.JSONDecodeError:
-                            tool_args = {"raw_args": tool_call.function.arguments}
-                        
-                        # Add tool use messages to main prompt
-                        await self._add_tool_messages(tool_name, tool_id, tool_args)
-                        
-                        # # Stream tool monitor response
-                        # async for chunk in self._stream_final_response(client=self.slm_client.slm, prompt_series=self.tool_monitor_messages):
-                        #     yield chunk
-                        
-                        # Call MCP tool
-                        result = await self._call_tool(tool_name, tool_args, audio_bytes)
-                        
-                        # Stream tool monitor response
-                        async for chunk in self._stream_final_response(client=self.slm_client.slm, prompt_series=self.tool_monitor_messages):
-                            yield chunk
-                        
-                        # Add tool response to LLM main prompt
-                        await self._add_tool_response(tool_name, tool_id, tool_args, result)
-                        
-                        # Get final response after tool use
-                        async for chunk in self._stream_final_response(client=self.llm, prompt_series=self.claude_messages):
-                            yield chunk
-                else:
-                    # Incase no tools selected - Handle normal text in the LLM reponse.
-                    self.claude_messages.append({"role": "assistant", "content": first_response.content})
-            
-                    # Get final response if no tools used.
-                    async for chunk in self._stream_final_response(client=self.llm, prompt_series=self.claude_messages):
-                        yield chunk
-
     async def _add_tool_messages(self, tool_name: str, tool_id: str, tool_args: Dict) -> None:
         """Add tool call messages to result history.
         
@@ -625,8 +377,282 @@ class MCPClientWrapper:
         logger.info(f"[TOOL RESPONSE] {tool_response}")
         self.claude_messages.append(tool_response)
 
+    def _process_document_file(
+        self,
+        files
+    ):
+        logger.info(f"[INGEST DOCUMENT] INGESTING DOCUMENT(S)...")
+        
+        # Normalize to list
+        if isinstance(files, str):
+            files = [files]
+        elif files is None:
+            files = []
+        
+        processed = 0
+        for file_path in files:
+            if not file_path or not file_path.lower().endswith('.pdf'):
+                logger.info(f"[INGEST DOCUMENT] Skipping non-PDF: {file_path}")
+                continue
+                
+            try:
+                filename = Path(file_path).name
+                logger.info(f"[INGEST DOCUMENT] Processing {filename}...")
+                
+                with open(file_path, 'rb') as fin:
+                    file_bytes = fin.read()
+                
+                logger.info(f"[INGEST DOCUMENT] Read {len(file_bytes)} bytes from {filename}")
+                
+                # Unique ID per file
+                document_id = str(uuid.uuid4())
+                
+                result = self.rag_pipeline.ingest_document(
+                    content=file_bytes,
+                    document_id=document_id,
+                    filename=filename
+                )
+                logger.info(f"[INGEST DOCUMENT] Ingested {filename} (ID: {document_id}, chunks: {result['num_chunks']})")
+                processed += 1
+                
+            except Exception as e:
+                logger.error(f"[DOCUMENT][INGESTION] Failed {file_path}: {e}")
+                logger.error(traceback.format_exc())
+        
+        logger.info(f"[INGEST DOCUMENT] Completed processing {processed}/{len(files)} PDF(s)")
 
-# Import base64 and io for image processing
-import base64
-import io
+                
+    async def _process_message(
+        self, 
+        text_query: str, 
+        history: List[Union[Dict[str, Any], ChatMessage]], 
+        upload_media=None,
+        rag_enabled: bool = True,
+    ):
+        """Process user message and stream response.
+        
+        Args:
+            text_query: User's text input
+            history: Chat history
+            upload_media: Optional uploaded file (image or audio)
+            
+        Yields:
+            Updated chat history, textbox value, image data, audio data
+        """
+        # Determine file type and process
+        file_type, image_data, audio_data = self._get_file_type(upload_media)
+        
+        # Async generator to stream partial responses
+        async for partial_messages in self._process_main_query(
+            text_query, history, image_data, audio_data, rag_enabled
+        ):
+            yield history + partial_messages, ""
+    
+    async def _process_main_query(
+        self, 
+        text_query: str, 
+        history: List[Union[Dict[str, Any], ChatMessage]], 
+        img: Image.Image = None, 
+        audio_bytes: Tuple[List, int] = None,
+        rag_enabled: bool = True,
+    ):
+        """Internal query processing with tool handling.
+        
+        Args:
+            text_query: User's text input
+            history: Chat history
+            img: Optional PIL Image
+            audio_bytes: Optional tuple of (audio array, sample rate)
+            
+        Yields:
+            Partial messages, image data, audio data
+        """
+        
+        self.tool_monitor_messages = [self.tool_sys_prompt]
+                
+        # ============================================================================
+        # Build conversation history
+        # ============================================================================
+        
+        for msg in history:
+            if isinstance(msg, ChatMessage):
+                role, content = msg.role, msg.content
+            else:
+                role, content = msg.get("role", "assistant"), msg.get("content")
+            
+            if isinstance(content, list):
+                content = content[0].get("text", "")
+            
+            if role in ["user", "assistant", "system"]:
+                self.claude_messages.append({"role": role, "content": content})
+        
+        # ============================================================================
+        # RAG mode
+        # ============================================================================
+        if rag_enabled:
+            logger.info(f"[RAG] TRIGGERED RAG MODE.")
+            try:
+                if not self.rag_pipeline:
+                    logger.info(f"[RAG] Error - RAG pipeline not initialized")
+                
+                start_retrieve = time.perf_counter()
+                # Retrieve documents
+                result = await self.rag_pipeline.retrieve(
+                    query=text_query,
+                    limit=10,
+                    document_id=None,
+                    validate=False
+                )
+                end_retrieve = time.perf_counter() - start_retrieve
+                
+                start_rag_post = time.perf_counter()
+                # Post process retrieved chunks into main LLM
+                rag_response = await add_document_tool_response(
+                    result=result,
+                    tool_id=None,
+                    tool_name=None
+                )
+                
+                # Add RAG prompt into the main LLM prompts.
+                rag_prompt = await self.rag_pipeline.retrieval_engine.get_response_prompt(
+                    query=result['query'],
+                    retrieved_document=rag_response["content"]
+                )
+                self.claude_messages.append(rag_prompt)
+                # logger.info(f"[RAG] CLAUDE MESSAGE WITH RAG: {self.claude_messages}")
+                end_rag_post = time.perf_counter() - start_rag_post
+                
+                start_stream_rag = time.perf_counter()
+                # Stream response - consume async gen
+                async for chunk in self._stream_final_response(client=self.llm, prompt_series=self.claude_messages):
+                    yield chunk
+                end_stream_rag = time.perf_counter() - start_stream_rag
+                
+                self.claude_messages = [self.sys_prompt]
+                
+                logger.info(f"[LATENCY] RETRIEVE TIME: {end_retrieve:.2f}\n")
+                logger.info(f"[LATENCY] RETRIEVE POST PROCESSING: {end_rag_post:.2f}\n")
+                logger.info(f"[LATENCY] RESPONSE RAG : {end_stream_rag:.2f}\n")
+            
+            except Exception as e:
+                logger.info(traceback.format_exc())
+                logger.info(f"[RAG] Error: {str(e)}")
+            
+        else:
+            # ============================================================================
+            # Intent classification using SLM
+            # ============================================================================
+            
+            start_pre = time.perf_counter()
+            pre_context_classifier = await self.slm_client.classify_intent(user_q=text_query)
+            end_pre = time.perf_counter() - start_pre
+            
+            output_image_byte = None
+            output_audio_data = None
+            
+            # ============================================================================
+            # Handle regular text response (chat)
+            # ============================================================================
 
+            if pre_context_classifier == "chat":
+                logger.info(f">>>> NO CONTEXT TRIGGERED\n\n")
+                
+                # Handle image description if available
+                if img:
+                    base64_image = await encode_image(DEFAULT_INPUT_IMAGE)
+                    
+                    self.claude_messages += [
+                        {
+                            "role": "user",
+                            "content": [
+                                { "type": "text", "text": text_query },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_image}",
+                                    }
+                                },
+                            ],
+                        }
+                    ]
+                    self.claude_messages = [self.sys_prompt]
+                    
+                # Stream response - consume async gen
+                async for chunk in self._stream_final_response(client=self.slm_client.slm, prompt_series=self.claude_messages):
+                    yield chunk
+                
+            # ============================================================================
+            # MCP Tool Calling
+            # ============================================================================
+            
+            elif pre_context_classifier == "tool":
+                # Tool function router/decision
+                start_tool_first = time.perf_counter()
+                response = await self._get_model_response_tool(self.claude_messages, history=history)
+                end_tool_first = time.perf_counter() - start_tool_first
+                
+                choice = response.choices[0]
+                logger.info(f"[FIRST CHOICE] - {choice}")
+                first_response = choice.message
+                
+                logger.info(f">>>> TOOL TRIGGERED\n\n")
+
+                # There maybe more than one tool used - handle tools sequentially.
+                if first_response.tool_calls:
+                    for tool_call in first_response.tool_calls:
+                        tool_id = tool_call.id
+                        tool_name = tool_call.function.name
+                        logger.info(f"[TOOL] - {tool_id} - {tool_name}")
+                        
+                        # Parse generated tool arguments from the LLM
+                        try:
+                            tool_args = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError:
+                            tool_args = {"raw_args": tool_call.function.arguments}
+                        
+                        start_tool_monitor = time.perf_counter()
+                        # Add tool use messages to main prompt
+                        await self._add_tool_messages(tool_name, tool_id, tool_args)
+                        end_tool_monitor = time.perf_counter() - start_tool_monitor
+                        
+                        # # Stream tool monitor response
+                        # async for chunk in self._stream_final_response(client=self.slm_client.slm, prompt_series=self.tool_monitor_messages):
+                        #     yield chunk
+                        
+                        # Call MCP tool
+                        start_call_tool = time.perf_counter()
+                        result = await self._call_tool(tool_name, tool_args, audio_bytes)
+                        end_call_tool = time.perf_counter() - start_call_tool
+                        
+                        # Stream tool monitor response
+                        async for chunk in self._stream_final_response(client=self.slm_client.slm, prompt_series=self.tool_monitor_messages):
+                            yield chunk
+                        
+                        # Add tool response to LLM main prompt
+                        await self._add_tool_response(tool_name, tool_id, tool_args, result)
+                        
+                        # logger.info(f"[TOOL CLAUDE MESSAGE]: {self.claude_messages}")
+                        start_stream_tool = time.perf_counter()
+                        # Get final response after tool use
+                        async for chunk in self._stream_final_response(client=self.llm, prompt_series=self.claude_messages):
+                            yield chunk
+                        end_stream_tool = time.perf_counter() - start_stream_tool
+                        
+                        self.claude_messages = [self.sys_prompt]
+                        
+                        logger.info(f"[LATENCY] TOOL FIRST: {end_tool_first:.2f}\n")
+                        logger.info(f"[LATENCY] TOOL CALL: {end_call_tool:.2f}\n")
+                        logger.info(f"[LATENCY] TOOL MONITOR: {end_tool_monitor:.2f}\n")
+                        logger.info(f"[LATENCY] TOOL RESPONSE: {end_stream_tool:.2f}\n")
+                        
+                else:
+                    # Incase no tools selected - Handle normal text in the LLM reponse.
+                    self.claude_messages.append({"role": "assistant", "content": first_response.content})
+            
+                    # Get final response if no tools used.
+                    async for chunk in self._stream_final_response(client=self.llm, prompt_series=self.claude_messages):
+                        yield chunk
+                    
+                    self.claude_messages = [self.sys_prompt]
+    
+            logger.info(f"[LATENCY] TOOL DECIDE: {end_pre:.2f}\n")

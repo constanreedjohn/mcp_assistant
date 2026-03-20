@@ -27,7 +27,7 @@ async def gradio_interface():
         return gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), False, False, gr.update(interactive=True)
 
     def toggle_doc_active(files):
-        if len(files) != 0:  # Handles list (empty=[], non-empty=[files]) or single str
+        if (files is not None) and len(files) != 0:  # Handles list (empty=[], non-empty=[files]) or single str
             return gr.update(visible=False, interactive=False, value=None), gr.update(visible=True, interactive=True), False, True, gr.update(interactive=False)
         return gr.update(visible=True, interactive=True), gr.update(visible=True, interactive=True), False, False, gr.update(interactive=True)
 

@@ -184,5 +184,5 @@ def save_audio_to_file(audio: np.ndarray, sr: int, filepath: str) -> None:
 # Function to encode the image
 async def encode_image(image_path):
     async with aiofiles.open(image_path, "rb") as image_file:
-        print(f"[IMAGE] GOT IMAGE PATH: {image_path}")
-        return base64.b64encode(image_file.read()).decode("utf-8")
+        # print(f"[IMAGE] GOT IMAGE PATH: {image_path}")
+        return base64.b64encode(await image_file.read()).decode("utf-8")
